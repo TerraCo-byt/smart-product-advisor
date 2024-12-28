@@ -1,5 +1,11 @@
-node_modules/
 venv/
+venv311/
 __pycache__/
+*.pyc
 .env
+.DS_Store
+node_modules/
 smart-product-advisor/llama.cpp/
+*.egg-info/
+dist/
+build/
