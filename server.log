@@ -1,0 +1,7 @@
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/Users/ayoub/shopify_project/app/services/ai/bridge/ai_bridge.py", line 2, in <module>
+    SHOPIFY_CLIENT_ID = os.getenv('SHOPIFY_API_KEY')
+                        ^^
+NameError: name 'os' is not defined. Did you forget to import 'os'?
