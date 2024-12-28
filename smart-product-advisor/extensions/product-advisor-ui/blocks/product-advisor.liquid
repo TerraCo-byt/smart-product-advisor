@@ -3,13 +3,10 @@
   Modern, minimal design with scroll-triggered display
 {% endcomment %}
 
-<link rel="stylesheet" href="{{ 'advisor.css' | asset_url }}">
-<script src="{{ 'advisor.js' | asset_url }}" defer></script>
-
 <div id="shopify-block-{{ block.id }}" class="smart-advisor-container" 
      data-shop-domain="{{ shop.permanent_domain }}"
      data-api-url="https://smart-product-advisor.onrender.com"
-     data-product-id="{{ product.id | json }}">
+     data-product-id="{{ product.id }}">
   <button 
     class="smart-advisor-button"
     style="--button-bg-color: {{ block.settings.button_bg_color }}; --button-text-color: {{ block.settings.button_text_color }}; --button-hover-color: {{ block.settings.button_hover_color }}"
@@ -20,7 +17,7 @@
   <div class="smart-advisor-modal">
     <div class="modal-content">
       <div class="modal-header">
-        <h2>Personalized Product Finder</h2>
+        <h2>Find Your Perfect Match</h2>
         <button class="close-modal" aria-label="Close">
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M18 6L6 18M6 6l12 12"/>
@@ -29,9 +26,9 @@
       </div>
       <form id="advisor-form" class="advisor-form">
         <div class="form-group">
-          <label for="price_range">Budget Range</label>
+          <label for="price_range">What's your budget?</label>
           <select name="price_range" id="price_range" required>
-            <option value="">Select your budget</option>
+            <option value="">Select your budget range</option>
             <option value="0-50">Under £50</option>
             <option value="50-100">£50 - £100</option>
             <option value="100-200">£100 - £200</option>
@@ -40,12 +37,13 @@
           </select>
         </div>
         <div class="form-group">
-          <label for="category">What are you looking for?</label>
-          <input type="text" name="category" id="category" placeholder="e.g., Home Decor, Furniture">
+          <label for="category">What type of product interests you?</label>
+          <input type="text" name="category" id="category" placeholder="e.g., Poufs, Pillows">
         </div>
         <div class="form-group">
-          <label for="keywords">Key Features</label>
-          <input type="text" name="keywords" id="keywords" placeholder="e.g., modern, comfortable">
+          <label for="keywords">Any specific features or style preferences?</label>
+          <input type="text" name="keywords" id="keywords" placeholder="e.g., velvet, handmade">
+          <small class="input-help">Separate multiple features with commas</small>
         </div>
         <button type="submit" class="submit-button">
           <span class="button-text">Find Perfect Matches</span>
@@ -60,7 +58,9 @@
 {% schema %}
 {
   "name": "Smart Product Advisor",
-  "target": "section",
+  "target": "body",
+  "javascript": ["advisor.js"],
+  "stylesheet": ["advisor.css"],
   "settings": [
     {
       "type": "header",

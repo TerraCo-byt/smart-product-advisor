@@ -405,11 +405,19 @@ def get_recommendations():
     finally:
         shopify.ShopifyResource.clear_session()
 
-@app.route('/api/mistral/recommend', methods=['POST'])
+@app.route('/api/mistral/recommend', methods=['POST', 'OPTIONS'])
 def get_mistral_recommendations():
     """
     API endpoint to get AI-powered product recommendations using Mistral
     """
+    if request.method == 'OPTIONS':
+        response = Response()
+        response.headers['Access-Control-Allow-Origin'] = request.headers.get('Origin', '*')
+        response.headers['Access-Control-Allow-Methods'] = 'POST'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, X-Shop-Domain'
+        response.headers['Access-Control-Allow-Credentials'] = 'true'
+        return response
+
     try:
         data = request.json
         shop_domain = request.headers.get('X-Shop-Domain')
@@ -419,17 +427,17 @@ def get_mistral_recommendations():
         logger.info(f"Getting Mistral recommendations for shop: {shop_domain}")
         logger.info(f"Request data: {data}")
 
-        # Setup Shopify session
-        access_token = session.get('access_token')
-        api_version = session.get('api_version', API_VERSION)
-        
-        shopify.Session.setup(api_key=SHOPIFY_API_KEY, secret=SHOPIFY_API_SECRET)
-        shopify_session = shopify.Session(shop_domain, api_version)
-        shopify_session.token = access_token
-        shopify.ShopifyResource.activate_session(shopify_session)
-
         # Get all products
-        products = shopify.Product.find(limit=20)
+        try:
+            products = shopify.Product.find(limit=20)
+        except Exception as e:
+            logger.error(f"Error fetching products: {str(e)}")
+            # Initialize Shopify session
+            shopify.Session.setup(api_key=SHOPIFY_API_KEY, secret=SHOPIFY_API_SECRET)
+            shopify_session = shopify.Session(shop_domain, API_VERSION)
+            shopify_session.token = session.get('access_token')
+            shopify.ShopifyResource.activate_session(shopify_session)
+            products = shopify.Product.find(limit=20)
         
         # Extract user preferences
         preferences = data.get('preferences', {})
@@ -440,6 +448,9 @@ def get_mistral_recommendations():
         # Filter products based on price range
         filtered_products = []
         for product in products:
+            if not product.variants or not product.variants[0].price:
+                continue
+
             variant = product.variants[0]
             price = float(variant.price)
             
@@ -456,33 +467,14 @@ def get_mistral_recommendations():
                 
             filtered_products.append(product)
 
-        # Prepare context for Mistral
-        context = {
-            'user_preferences': {
-                'price_range': price_range,
-                'category': category,
-                'keywords': keywords
-            },
-            'available_products': [
-                {
-                    'title': p.title,
-                    'type': p.product_type,
-                    'description': p.body_html,
-                    'price': float(p.variants[0].price),
-                    'tags': p.tags
-                }
-                for p in filtered_products
-            ]
-        }
-
-        # Get recommendations from Mistral
+        # Get recommendations
         recommendations = []
         for product in filtered_products[:6]:  # Limit to top 6 products
             # Generate personalized explanation using product details and user preferences
             explanation = generate_product_explanation(product, keywords, price_range)
             
             # Calculate confidence score based on matching criteria
-            confidence_score = calculate_confidence_score(product, context['user_preferences'])
+            confidence_score = calculate_confidence_score(product, preferences)
             
             recommendations.append({
                 'product': {
@@ -498,10 +490,13 @@ def get_mistral_recommendations():
         # Sort by confidence score
         recommendations.sort(key=lambda x: x['confidence_score'], reverse=True)
 
-        return jsonify({
+        response = jsonify({
             'success': True,
             'recommendations': recommendations
         })
+        response.headers['Access-Control-Allow-Origin'] = request.headers.get('Origin', '*')
+        response.headers['Access-Control-Allow-Credentials'] = 'true'
+        return response
 
     except Exception as e:
         logger.error(f"Mistral recommendations error: {str(e)}")
@@ -523,30 +518,49 @@ def generate_product_explanation(product, keywords, price_range):
         min_price, max_price = map(lambda x: float(x) if x != '+' else float('inf'), 
                                 price_range.split('-'))
         if price <= min_price:
-            reasons.append(f"Great value: This product is within your budget at ${price:.2f}")
+            reasons.append(f"Great value: This product is within your budget at £{price:.2f}")
         elif price <= max_price:
-            reasons.append(f"Good price point: Fits your budget range at ${price:.2f}")
+            reasons.append(f"Good price point: Fits your budget range at £{price:.2f}")
     
-    # Keyword matching
-    matching_keywords = [k for k in keywords if k.lower() in 
-                        (product.title.lower() + ' ' + 
-                         product.body_html.lower() + ' ' + 
-                         product.product_type.lower() + ' ' + 
-                         ' '.join(product.tags).lower())]
+    # Keyword matching with detailed explanations
+    if keywords:
+        matching_features = []
+        for keyword in keywords:
+            keyword = keyword.lower().strip()
+            if not keyword:
+                continue
+                
+            if keyword in product.title.lower():
+                matching_features.append(f"Features {keyword} design")
+            elif keyword in product.product_type.lower():
+                matching_features.append(f"Matches your {keyword} preference")
+            elif any(keyword in tag.lower() for tag in product.tags):
+                matching_features.append(f"Tagged as {keyword}")
+            elif keyword in product.body_html.lower():
+                matching_features.append(f"Includes {keyword} features")
+        
+        if matching_features:
+            reasons.append("Matches your preferences: " + ", ".join(matching_features))
     
-    if matching_keywords:
-        reasons.append(f"Matches your preferences: {', '.join(matching_keywords)}")
-    
-    # Product type match
+    # Product type match with context
     if product.product_type:
-        reasons.append(f"Category match: {product.product_type}")
+        reasons.append(f"Perfect category match: {product.product_type}")
     
-    # Add product-specific features
+    # Extract and add key product features
     if product.body_html:
-        # Extract key features from description
         features = extract_key_features(product.body_html)
         if features:
-            reasons.append(f"Key features: {features}")
+            reasons.append(f"Standout features: {features}")
+    
+    # Add product-specific highlights
+    if product.tags:
+        relevant_tags = [tag for tag in product.tags if any(
+            keyword.lower() in tag.lower() 
+            for keyword in keywords
+        )] if keywords else []
+        
+        if relevant_tags:
+            reasons.append(f"Matching qualities: {', '.join(relevant_tags)}")
     
     return "\n".join(reasons)
 
@@ -570,27 +584,70 @@ def calculate_confidence_score(product, preferences):
     """Calculate a confidence score for how well the product matches preferences"""
     score = 0.5  # Base score
     
-    # Price range match
+    # Price range match (30% weight)
     if preferences.get('price_range'):
         price = float(product.variants[0].price)
         min_price, max_price = map(lambda x: float(x) if x != '+' else float('inf'), 
                                 preferences['price_range'].split('-'))
         if min_price <= price <= max_price:
-            score += 0.2
+            price_match = 1.0
+            # Bonus for being in the middle of the range
+            price_range_mid = (min_price + max_price) / 2 if max_price != float('inf') else min_price * 1.5
+            price_distance = abs(price - price_range_mid) / price_range_mid
+            price_match -= min(0.5, price_distance)  # Reduce score based on distance from middle
+            score += price_match * 0.3
     
-    # Category match
-    if preferences.get('category') and preferences['category'].lower() in product.product_type.lower():
-        score += 0.15
+    # Category match (30% weight)
+    if preferences.get('category'):
+        category = preferences['category'].lower()
+        product_type = product.product_type.lower()
+        if category == product_type:
+            score += 0.3
+        elif category in product_type or product_type in category:
+            score += 0.15
+        # Check tags for category matches
+        elif any(category in tag.lower() for tag in product.tags):
+            score += 0.1
     
-    # Keyword matches
+    # Keyword matches (40% weight)
     if preferences.get('keywords'):
-        product_text = (product.title.lower() + ' ' + 
-                       product.body_html.lower() + ' ' + 
-                       product.product_type.lower() + ' ' + 
-                       ' '.join(product.tags).lower())
+        product_text = (
+            f"{product.title} {product.body_html} {product.product_type} {' '.join(product.tags)}"
+        ).lower()
         
-        matches = sum(1 for k in preferences['keywords'] if k.lower() in product_text)
-        score += min(0.15, matches * 0.05)  # Up to 0.15 for keyword matches
+        keyword_scores = []
+        for keyword in preferences['keywords']:
+            keyword = keyword.lower().strip()
+            if not keyword:
+                continue
+                
+            # Exact match in title (highest weight)
+            if keyword in product.title.lower():
+                keyword_scores.append(1.0)
+            # Match in product type
+            elif keyword in product.product_type.lower():
+                keyword_scores.append(0.8)
+            # Match in tags
+            elif any(keyword in tag.lower() for tag in product.tags):
+                keyword_scores.append(0.7)
+            # Match in description
+            elif keyword in product.body_html.lower():
+                keyword_scores.append(0.6)
+            else:
+                # Check for partial matches
+                partial_matches = [
+                    word for word in product_text.split()
+                    if keyword in word or word in keyword
+                ]
+                if partial_matches:
+                    keyword_scores.append(0.3)
+                else:
+                    keyword_scores.append(0)
+        
+        # Average keyword scores and apply weight
+        if keyword_scores:
+            keyword_score = sum(keyword_scores) / len(keyword_scores)
+            score += keyword_score * 0.4
     
     return min(1.0, score)  # Cap at 1.0
 

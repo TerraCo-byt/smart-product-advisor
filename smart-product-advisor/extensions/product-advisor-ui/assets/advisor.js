@@ -155,7 +155,8 @@ class SmartAdvisor {
           'Accept': 'application/json',
           'X-Shop-Domain': this.shopDomain
         },
-        body: JSON.stringify(userQuery)
+        body: JSON.stringify(userQuery),
+        credentials: 'include'
       });
 
       console.log('Response status:', response.status);
@@ -226,7 +227,7 @@ class SmartAdvisor {
               <p class="reason">✓ ${reason.trim()}</p>
             `).join('')}
           </div>
-          <a href="${rec.product.url}" class="view-product">View Details</a>
+          <a href="${rec.product.url}" class="view-product" target="_blank">View Details</a>
         </div>
       `;
     }).join('');

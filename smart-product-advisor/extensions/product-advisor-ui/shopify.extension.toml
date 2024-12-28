@@ -1,4 +1,4 @@
-name = "Smart Product Advisor"
+name = "product-advisor"
 type = "theme_app_extension"
 
 [capabilities]
@@ -11,11 +11,16 @@ namespace = "smart_advisor"
 key = "settings"
 
 [[extensions]]
-name = "Smart Product Advisor"
-handle = "smart-product-advisor"
+handle = "product-advisor"
 type = "theme_app_extension"
 
-[extensions.targeting]
-target = "section"
+[extensions.settings]
+target = "body"
 module = "./blocks/app.liquid"
+
+[extensions.blocks]
+name = "Smart Product Advisor"
+type = "app_block"
+target = "body"
+module = "./blocks/product-advisor.liquid"
 
