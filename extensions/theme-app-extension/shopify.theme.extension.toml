@@ -1,0 +1,3 @@
+name = "Smart Product Advisor"
+type = "theme"
+extension_points = ["product", "body"] 

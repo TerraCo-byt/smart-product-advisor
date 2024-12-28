@@ -1,0 +1,21 @@
+name = "Smart Product Advisor"
+type = "theme_app_extension"
+
+[capabilities]
+block_progress = true
+customization = true
+network_access = true
+
+[[metafields]]
+namespace = "smart_advisor"
+key = "settings"
+
+[[extensions]]
+name = "Smart Product Advisor"
+handle = "smart-product-advisor"
+type = "theme_app_extension"
+
+[extensions.targeting]
+target = "section"
+module = "./blocks/app.liquid"
+

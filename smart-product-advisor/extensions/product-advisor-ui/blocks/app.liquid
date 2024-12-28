@@ -1,0 +1,96 @@
+{% comment %}
+  Smart Product Advisor App Block
+  Modern, minimal design with scroll-triggered display
+{% endcomment %}
+
+<link rel="stylesheet" href="{{ 'advisor.css' | asset_url }}">
+<script src="{{ 'advisor.js' | asset_url }}" defer></script>
+
+<div id="shopify-block-{{ block.id }}" class="smart-advisor-container" 
+     data-shop-domain="{{ shop.permanent_domain }}"
+     data-api-url="https://smart-product-advisor.onrender.com"
+     data-product-id="{{ product.id | json }}">
+  <button 
+    class="smart-advisor-button"
+    style="--button-bg-color: {{ block.settings.button_bg_color }}; --button-text-color: {{ block.settings.button_text_color }}; --button-hover-color: {{ block.settings.button_hover_color }}"
+  >
+    <span class="advisor-icon">💡</span>
+    <span class="advisor-text">{{ block.settings.button_text }}</span>
+  </button>
+  <div class="smart-advisor-modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>Find Your Perfect Match</h2>
+        <button class="close-modal" aria-label="Close">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M18 6L6 18M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+      <form id="advisor-form" class="advisor-form">
+        <div class="form-group">
+          <label for="price_range">What's your budget?</label>
+          <select name="price_range" id="price_range" required>
+            <option value="">Select your budget range</option>
+            <option value="0-50">Under £50</option>
+            <option value="50-100">£50 - £100</option>
+            <option value="100-200">£100 - £200</option>
+            <option value="200-500">£200 - £500</option>
+            <option value="500+">£500+</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="category">What type of product interests you?</label>
+          <input type="text" name="category" id="category" placeholder="e.g., Home Decor, Furniture, Lighting">
+        </div>
+        <div class="form-group">
+          <label for="keywords">Any specific features or style preferences?</label>
+          <input type="text" name="keywords" id="keywords" placeholder="e.g., modern, comfortable, sustainable">
+          <small class="input-help">Separate multiple features with commas</small>
+        </div>
+        <button type="submit" class="submit-button">
+          <span class="button-text">Find My Perfect Match</span>
+          <span class="button-loader"></span>
+        </button>
+      </form>
+      <div id="recommendations-container" class="recommendations-container"></div>
+    </div>
+  </div>
+</div>
+
+{% schema %}
+{
+  "name": "Smart Product Advisor",
+  "target": "body",
+  "settings": [
+    {
+      "type": "header",
+      "content": "Button Appearance"
+    },
+    {
+      "type": "color",
+      "id": "button_bg_color",
+      "label": "Button Background Color",
+      "default": "#1a1a1a"
+    },
+    {
+      "type": "color",
+      "id": "button_text_color",
+      "label": "Button Text Color",
+      "default": "#ffffff"
+    },
+    {
+      "type": "color",
+      "id": "button_hover_color",
+      "label": "Button Hover Color",
+      "default": "#2c2c2c"
+    },
+    {
+      "type": "text",
+      "id": "button_text",
+      "label": "Button Text",
+      "default": "Get Personal Recommendations"
+    }
+  ]
+}
+{% endschema %} 

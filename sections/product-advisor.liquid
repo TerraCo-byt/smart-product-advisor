@@ -1,0 +1,336 @@
+{% comment %}
+    Product Advisor Section
+    Adds a floating button and recommendation popup to help customers find products
+{% endcomment %}
+
+<div class="smart-advisor-container" 
+     data-shop-domain="{{ shop.permanent_domain }}"
+     data-api-url="https://smart-product-advisor.onrender.com">
+  <button 
+    class="smart-advisor-button"
+    style="background-color: {{ settings.button_color }}"
+  >
+    {{ settings.button_text }}
+  </button>
+  <div class="smart-advisor-modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>Find Your Perfect Product</h2>
+        <button class="close-modal">&times;</button>
+      </div>
+      <form id="advisor-form" class="advisor-form">
+        <div class="form-group">
+          <label for="price_range">Price Range</label>
+          <select name="price_range" id="price_range" required>
+            <option value="0-50">Under $50</option>
+            <option value="50-100">$50 - $100</option>
+            <option value="100-200">$100 - $200</option>
+            <option value="200-500">$200 - $500</option>
+            <option value="500+">$500+</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="category">Category</label>
+          <input type="text" name="category" id="category" placeholder="e.g., Electronics, Clothing">
+        </div>
+        <div class="form-group">
+          <label for="keywords">Keywords</label>
+          <input type="text" name="keywords" id="keywords" placeholder="e.g., comfortable, durable">
+        </div>
+        <button type="submit" class="submit-button">Get Recommendations</button>
+      </form>
+      <div id="recommendations-container" class="recommendations-container"></div>
+    </div>
+  </div>
+</div>
+
+<style>
+.smart-advisor-container {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  z-index: 999999;
+}
+
+.smart-advisor-button {
+  padding: 12px 24px;
+  border: none;
+  border-radius: 25px;
+  color: white;
+  cursor: pointer;
+  font-size: 16px;
+  font-weight: 500;
+  box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+  transition: transform 0.2s;
+}
+
+.smart-advisor-button:hover {
+  transform: scale(1.05);
+}
+
+.smart-advisor-modal {
+  display: none;
+  position: fixed;
+  bottom: 80px;
+  right: 20px;
+  width: 400px;
+  background: white;
+  border-radius: 10px;
+  box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+}
+
+.smart-advisor-modal.active {
+  display: block;
+}
+
+.modal-content {
+  padding: 20px;
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+.modal-header h2 {
+  margin: 0;
+  font-size: 20px;
+  color: #333;
+}
+
+.close-modal {
+  background: none;
+  border: none;
+  font-size: 24px;
+  cursor: pointer;
+  color: #666;
+}
+
+.advisor-form {
+  margin-bottom: 20px;
+}
+
+.form-group {
+  margin-bottom: 15px;
+}
+
+.form-group label {
+  display: block;
+  margin-bottom: 5px;
+  font-weight: 500;
+  color: #333;
+}
+
+.form-group input,
+.form-group select {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+.submit-button {
+  width: 100%;
+  padding: 10px;
+  background-color: {{ settings.button_color }};
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.recommendations-container {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 15px;
+  max-height: 400px;
+  overflow-y: auto;
+  margin-top: 20px;
+}
+
+.product-card {
+  border: 1px solid #eee;
+  border-radius: 8px;
+  padding: 10px;
+  text-align: center;
+}
+
+.product-card img {
+  width: 100%;
+  height: auto;
+  border-radius: 4px;
+}
+
+.product-card h3 {
+  margin: 10px 0;
+  font-size: 14px;
+  color: #333;
+}
+
+.product-card .price {
+  color: #2c2c2c;
+  font-weight: bold;
+  margin: 5px 0;
+}
+
+.view-product {
+  display: inline-block;
+  padding: 5px 10px;
+  background: {{ settings.button_color }};
+  color: white;
+  text-decoration: none;
+  border-radius: 4px;
+  margin-top: 5px;
+  font-size: 14px;
+}
+</style>
+
+<script>
+class SmartAdvisor {
+  constructor() {
+    this.container = document.querySelector('.smart-advisor-container');
+    this.button = document.querySelector('.smart-advisor-button');
+    this.modal = document.querySelector('.smart-advisor-modal');
+    this.closeButton = document.querySelector('.close-modal');
+    this.form = document.getElementById('advisor-form');
+    this.apiUrl = this.container.dataset.apiUrl;
+    this.shopDomain = this.container.dataset.shopDomain;
+    
+    this.init();
+  }
+
+  init() {
+    this.button.addEventListener('click', () => this.openModal());
+    this.closeButton.addEventListener('click', () => this.closeModal());
+    this.form.addEventListener('submit', (e) => this.handleSubmit(e));
+    
+    // Close modal when clicking outside
+    document.addEventListener('click', (e) => {
+      if (this.modal.classList.contains('active') && 
+          !this.modal.contains(e.target) && 
+          !this.button.contains(e.target)) {
+        this.closeModal();
+      }
+    });
+  }
+
+  openModal() {
+    this.modal.classList.add('active');
+  }
+
+  closeModal() {
+    this.modal.classList.remove('active');
+  }
+
+  async handleSubmit(e) {
+    e.preventDefault();
+    const submitButton = this.form.querySelector('.submit-button');
+    submitButton.disabled = true;
+    submitButton.textContent = 'Finding recommendations...';
+
+    const formData = new FormData(this.form);
+    const data = {
+      preferences: {
+        price_range: formData.get('price_range'),
+        category: formData.get('category'),
+        keywords: formData.get('keywords').split(',').map(k => k.trim())
+      },
+      context: {
+        current_product: {{ product.id | json }},
+        time_of_day: new Date().getHours(),
+        device_type: /Mobile|Android|iPhone/i.test(navigator.userAgent) ? 'mobile' : 'desktop'
+      }
+    };
+
+    try {
+      const response = await fetch(`${this.apiUrl}/api/smart-recommend?shop=${this.shopDomain}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(data)
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to get recommendations');
+      }
+
+      const result = await response.json();
+      this.displayRecommendations(result.matches);
+    } catch (error) {
+      console.error('Error getting recommendations:', error);
+      document.getElementById('recommendations-container').innerHTML = `
+        <div class="error-message">
+          Sorry, we couldn't get recommendations at this time. Please try again later.
+        </div>
+      `;
+    } finally {
+      submitButton.disabled = false;
+      submitButton.textContent = 'Get Recommendations';
+    }
+  }
+
+  displayRecommendations(matches) {
+    const container = document.getElementById('recommendations-container');
+    if (!matches || matches.length === 0) {
+      container.innerHTML = `
+        <div class="no-results">
+          No matching products found. Try different preferences.
+        </div>
+      `;
+      return;
+    }
+
+    container.innerHTML = matches.map(match => `
+      <div class="product-card">
+        ${match.product.image ? 
+          `<img src="${match.product.image}" alt="${match.product.title}">` :
+          '<div class="no-image">No image available</div>'
+        }
+        <h3>${match.product.title}</h3>
+        <p class="price">$${match.product.price}</p>
+        <div class="reasons">
+          ${match.reasons.map(reason => `<p class="reason">${reason}</p>`).join('')}
+        </div>
+        <a href="${match.product.url}" class="view-product">View Product</a>
+      </div>
+    `).join('');
+  }
+}
+
+// Initialize the advisor when the DOM is ready
+document.addEventListener('DOMContentLoaded', () => {
+  new SmartAdvisor();
+});
+</script>
+
+{% schema %}
+{
+  "name": "Smart Product Advisor",
+  "target": "section",
+  "settings": [
+    {
+      "type": "color",
+      "id": "button_color",
+      "label": "Button Color",
+      "default": "#00a853"
+    },
+    {
+      "type": "text",
+      "id": "button_text",
+      "label": "Button Text",
+      "default": "Get Smart Recommendations"
+    }
+  ],
+  "presets": [
+    {
+      "name": "Smart Product Advisor",
+      "category": "Custom"
+    }
+  ]
+}
+{% endschema %} 
