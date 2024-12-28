@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: smart-product-advisor
+    runtime: python
+    region: ohio
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: FLASK_APP
+        value: app.py
+      - key: FLASK_ENV
+        value: production
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: smart-advisor-redis
+          property: connectionString
+    autoDeploy: true
+
+  - type: redis
+    name: smart-advisor-redis
+    ipAllowList: []
+    plan: free 
