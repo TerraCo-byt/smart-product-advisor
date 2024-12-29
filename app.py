@@ -434,5 +434,179 @@ def install():
         logger.error(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
 
+@app.route('/app')
+def app_page():
+    """Main app page that loads in the Shopify Admin"""
+    try:
+        shop = request.args.get('shop')
+        if not shop:
+            logger.error("Missing shop parameter in app page")
+            return jsonify({"error": "Missing shop parameter"}), 400
+
+        # Make session permanent
+        session.permanent = True
+        
+        # Verify shop has valid access token
+        access_token = session.get('access_token')
+        if not access_token:
+            logger.info(f"No access token found, redirecting to install: {shop}")
+            return redirect(f"/install?shop={shop}")
+
+        # Get the API version from session
+        api_version = session.get('api_version', API_VERSION)
+        
+        # Setup Shopify session
+        shopify.Session.setup(api_key=SHOPIFY_API_KEY, secret=SHOPIFY_API_SECRET)
+        shopify_session = shopify.Session(shop, api_version)
+        shopify_session.token = access_token
+        shopify.ShopifyResource.activate_session(shopify_session)
+
+        try:
+            # Verify the token still works
+            shop_data = shopify.Shop.current()
+            logger.info(f"Loading app page for shop: {shop_data.name}")
+            
+            # Return the app HTML
+            return f"""
+            <!DOCTYPE html>
+            <html>
+                <head>
+                    <title>Smart Product Advisor</title>
+                    <script src="https://unpkg.com/@shopify/app-bridge@3"></script>
+                    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+                    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+                    <script>
+                        var AppBridge = window['app-bridge'];
+                        var createApp = AppBridge.default;
+                        var app = createApp({{
+                            apiKey: '{SHOPIFY_API_KEY}',
+                            host: window.location.search.substring(1).split('=')[1],
+                            forceRedirect: true
+                        }});
+                    </script>
+                </head>
+                <body class="bg-gray-100">
+                    <div class="container mx-auto px-4 py-8">
+                        <h1 class="text-3xl font-bold mb-8 text-gray-800">Smart Product Advisor</h1>
+                        
+                        <div class="bg-white rounded-lg shadow-md p-6 mb-8">
+                            <h2 class="text-xl font-semibold mb-4">Get Product Recommendations</h2>
+                            
+                            <div class="space-y-4">
+                                <div>
+                                    <label class="block text-gray-700 mb-2">Price Range</label>
+                                    <select id="priceRange" class="w-full p-2 border rounded">
+                                        <option value="0-50">Under $50</option>
+                                        <option value="50-100">$50 - $100</option>
+                                        <option value="100-200">$100 - $200</option>
+                                        <option value="200-500">$200 - $500</option>
+                                        <option value="500+">$500+</option>
+                                    </select>
+                                </div>
+                                
+                                <div>
+                                    <label class="block text-gray-700 mb-2">Category</label>
+                                    <input type="text" id="category" class="w-full p-2 border rounded" placeholder="e.g., Electronics, Clothing">
+                                </div>
+                                
+                                <div>
+                                    <label class="block text-gray-700 mb-2">Customer Preferences</label>
+                                    <textarea id="preferences" class="w-full p-2 border rounded" rows="3" placeholder="Describe what you're looking for (e.g., durable, waterproof, comfortable)"></textarea>
+                                </div>
+                                
+                                <button onclick="getRecommendations()" class="bg-green-500 text-white px-6 py-2 rounded hover:bg-green-600">
+                                    Get Recommendations
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <div id="recommendationsLoading" class="hidden">
+                            <div class="flex items-center justify-center py-8">
+                                <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-green-500"></div>
+                            </div>
+                        </div>
+                        
+                        <div id="recommendationsList" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                            <!-- Recommendations will be inserted here -->
+                        </div>
+                    </div>
+
+                    <script>
+                        function getRecommendations() {{
+                            const priceRange = document.getElementById('priceRange').value;
+                            const category = document.getElementById('category').value;
+                            const preferences = document.getElementById('preferences').value;
+
+                            // Show loading state
+                            document.getElementById('recommendationsLoading').classList.remove('hidden');
+                            document.getElementById('recommendationsList').classList.add('hidden');
+
+                            // Make API call to get recommendations
+                            fetch('/api/recommendations', {{
+                                method: 'POST',
+                                headers: {{
+                                    'Content-Type': 'application/json',
+                                    'X-Shop-Domain': '{shop}'
+                                }},
+                                body: JSON.stringify({{
+                                    preferences: {{
+                                        price_range: priceRange,
+                                        category: category,
+                                        keywords: preferences.split(',').map(k => k.trim())
+                                    }}
+                                }})
+                            }})
+                            .then(response => response.json())
+                            .then(data => {{
+                                // Hide loading state
+                                document.getElementById('recommendationsLoading').classList.add('hidden');
+                                document.getElementById('recommendationsList').classList.remove('hidden');
+
+                                if (!data.success) {{
+                                    throw new Error(data.error || 'Failed to get recommendations');
+                                }}
+
+                                // Display recommendations
+                                const recommendationsList = document.getElementById('recommendationsList');
+                                recommendationsList.innerHTML = '';
+
+                                data.recommendations.forEach(rec => {{
+                                    const product = rec.product;
+                                    const card = `
+                                        <div class="bg-white rounded-lg shadow-md p-6 mb-4">
+                                            ${{product.image_url ? `<img src="${{product.image_url}}" alt="${{product.title}}" class="w-full h-48 object-cover mb-4 rounded">` : ''}}
+                                            <h3 class="text-lg font-semibold mb-2">${{product.title}}</h3>
+                                            <p class="text-gray-600 mb-2">£${{product.price.toFixed(2)}}</p>
+                                            <div class="mb-4">
+                                                <div class="text-sm text-gray-500">Confidence Score: ${{(rec.confidence_score * 100).toFixed(1)}}%</div>
+                                                <div class="text-sm text-gray-700 mt-2">${{rec.explanation}}</div>
+                                            </div>
+                                            <a href="${{product.url}}" target="_blank" class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">View Product</a>
+                                        </div>
+                                    `;
+                                    recommendationsList.innerHTML += card;
+                                }});
+                            }})
+                            .catch(error => {{
+                                console.error('Error:', error);
+                                document.getElementById('recommendationsLoading').classList.add('hidden');
+                                alert('Error getting recommendations: ' + error.message);
+                            }});
+                        }}
+                    </script>
+                </body>
+            </html>
+            """
+        except Exception as e:
+            logger.error(f"Failed to verify shop access: {str(e)}")
+            return redirect(f"/install?shop={shop}")
+            
+    except Exception as e:
+        logger.error(f"App page error: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({"error": str(e)}), 500
+    finally:
+        shopify.ShopifyResource.clear_session()
+
 if __name__ == '__main__':
     app.run(debug=True) 
