@@ -14,6 +14,7 @@
     <span class="advisor-icon">💡</span>
     <span class="advisor-text">{{ block.settings.button_text }}</span>
   </button>
+  <div class="modal-overlay"></div>
   <div class="smart-advisor-modal">
     <div class="modal-content">
       <div class="modal-header">
@@ -47,10 +48,19 @@
         </div>
         <button type="submit" class="submit-button">
           <span class="button-text">Find Perfect Matches</span>
-          <span class="button-loader"></span>
+          <div class="button-loader"></div>
         </button>
       </form>
-      <div id="recommendations-container" class="recommendations-container"></div>
+      <div id="recommendations-container" class="recommendations-container">
+        <div class="loading-indicator" style="display: none;">
+          <div class="spinner"></div>
+          <p>Finding perfect matches for you...</p>
+        </div>
+        <div class="error-message" style="display: none;">
+          <p>Sorry, we couldn't get recommendations at this time.</p>
+          <button class="retry-button">Try Again</button>
+        </div>
+      </div>
     </div>
   </div>
 </div>

@@ -12,6 +12,11 @@ import base64
 import json
 from urllib.parse import urlencode, quote
 import re
+from mistralai.client import MistralClient
+from mistralai.models.chat_completion import ChatMessage
+import subprocess
+import tempfile
+import requests
 
 # Configure logging
 logging.basicConfig(
@@ -77,6 +82,22 @@ logger.info(f"Available API versions: {AVAILABLE_VERSIONS}")
 if not SHOPIFY_API_KEY or not SHOPIFY_API_SECRET:
     logger.error("Missing Shopify API credentials!")
     raise ValueError("Missing required environment variables: SHOPIFY_API_KEY and SHOPIFY_API_SECRET")
+
+# Initialize Mistral client
+MISTRAL_API_KEY = os.environ.get('MISTRAL_API_KEY')
+if not MISTRAL_API_KEY:
+    logger.error("Missing Mistral API key!")
+    raise ValueError("Missing required environment variable: MISTRAL_API_KEY")
+
+mistral_client = MistralClient(api_key=MISTRAL_API_KEY)
+
+# Hugging Face configuration
+HUGGINGFACE_API_TOKEN = os.environ.get('HUGGINGFACE_API_TOKEN')
+if not HUGGINGFACE_API_TOKEN:
+    logger.error("Missing Hugging Face API token!")
+    raise ValueError("Missing required environment variable: HUGGINGFACE_API_TOKEN")
+
+HUGGINGFACE_API_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2"
 
 def verify_hmac(params):
     """Verify the HMAC signature from Shopify"""
@@ -405,11 +426,111 @@ def get_recommendations():
     finally:
         shopify.ShopifyResource.clear_session()
 
+def generate_product_recommendations(products, preferences):
+    """Generate AI-powered product recommendations using Hugging Face Inference API"""
+    try:
+        # Prepare product context
+        product_context = "\n".join([
+            f"Product {i+1}:"
+            f"\nTitle: {p.title}"
+            f"\nType: {p.product_type}"
+            f"\nPrice: £{p.variants[0].price}"
+            f"\nDescription: {p.body_html}"
+            f"\nTags: {', '.join(p.tags)}"
+            for i, p in enumerate(products)
+        ])
+
+        # Prepare user preferences
+        user_prefs = (
+            f"Price Range: {preferences.get('price_range', 'Any')}\n"
+            f"Category: {preferences.get('category', 'Any')}\n"
+            f"Keywords: {', '.join(preferences.get('keywords', []))}"
+        )
+
+        # Construct the prompt
+        system_prompt = """You are a smart product recommendation system. Analyze the available products and user preferences to provide personalized recommendations. For each recommended product:
+1. Evaluate how well it matches the user's preferences
+2. Calculate a confidence score (0-1)
+3. Provide a detailed explanation of why this product is recommended
+4. Consider price range, category, and specific features
+Format your response as JSON with the following structure for each recommendation:
+{
+    "product_index": 1,
+    "confidence_score": 0.95,
+    "explanation": "Detailed reason for recommendation"
+}"""
+
+        user_prompt = f"""Available Products:
+{product_context}
+
+User Preferences:
+{user_prefs}
+
+Provide recommendations for the most suitable products. Return only the JSON array of recommendations."""
+
+        # Prepare the payload for Hugging Face
+        payload = {
+            "inputs": f"{system_prompt}\n\n{user_prompt}",
+            "parameters": {
+                "max_new_tokens": 1000,
+                "temperature": 0.7,
+                "return_full_text": False
+            }
+        }
+
+        # Make request to Hugging Face
+        headers = {
+            "Authorization": f"Bearer {HUGGINGFACE_API_TOKEN}",
+            "Content-Type": "application/json"
+        }
+
+        response = requests.post(
+            HUGGINGFACE_API_URL,
+            headers=headers,
+            json=payload
+        )
+
+        if response.status_code != 200:
+            logger.error(f"Hugging Face API error: {response.text}")
+            raise Exception("Failed to get recommendations from Hugging Face")
+
+        # Parse response
+        recommendations_text = response.json()[0]["generated_text"]
+        
+        # Extract JSON array from response
+        json_str = recommendations_text.strip()
+        if "```json" in json_str:
+            json_str = json_str.split("```json")[1].split("```")[0]
+        
+        recommendations_data = json.loads(json_str)
+        
+        # Format recommendations
+        formatted_recommendations = []
+        for rec in recommendations_data:
+            product_idx = rec['product_index'] - 1
+            if 0 <= product_idx < len(products):
+                product = products[product_idx]
+                formatted_recommendations.append({
+                    'product': {
+                        'title': product.title,
+                        'price': float(product.variants[0].price),
+                        'image_url': product.images[0].src if product.images else None,
+                        'url': f"https://{request.headers.get('X-Shop-Domain')}/products/{product.handle}"
+                    },
+                    'confidence_score': rec['confidence_score'],
+                    'explanation': rec['explanation']
+                })
+        
+        return formatted_recommendations
+            
+    except Exception as e:
+        logger.error(f"Error generating recommendations: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise
+
 @app.route('/api/mistral/recommend', methods=['POST', 'OPTIONS'])
 def get_mistral_recommendations():
-    """
-    API endpoint to get AI-powered product recommendations using Mistral
-    """
+    """API endpoint to get AI-powered product recommendations using local Mistral"""
     if request.method == 'OPTIONS':
         response = Response()
         response.headers['Access-Control-Allow-Origin'] = request.headers.get('Origin', '*')
@@ -441,58 +562,16 @@ def get_mistral_recommendations():
         
         # Extract user preferences
         preferences = data.get('preferences', {})
-        price_range = preferences.get('price_range')
-        category = preferences.get('category', '').lower()
-        keywords = preferences.get('keywords', [])
         
-        # Filter products based on price range
-        filtered_products = []
-        for product in products:
-            if not product.variants or not product.variants[0].price:
-                continue
-
-            variant = product.variants[0]
-            price = float(variant.price)
-            
-            # Price range filtering
-            if price_range:
-                min_price, max_price = map(lambda x: float(x) if x != '+' else float('inf'), 
-                                        price_range.split('-'))
-                if not (min_price <= price <= max_price):
-                    continue
-            
-            # Category filtering
-            if category and category not in product.product_type.lower():
-                continue
-                
-            filtered_products.append(product)
-
-        # Get recommendations
-        recommendations = []
-        for product in filtered_products[:6]:  # Limit to top 6 products
-            # Generate personalized explanation using product details and user preferences
-            explanation = generate_product_explanation(product, keywords, price_range)
-            
-            # Calculate confidence score based on matching criteria
-            confidence_score = calculate_confidence_score(product, preferences)
-            
-            recommendations.append({
-                'product': {
-                    'title': product.title,
-                    'price': float(product.variants[0].price),
-                    'image_url': product.images[0].src if product.images else None,
-                    'url': f"https://{shop_domain}/products/{product.handle}"
-                },
-                'confidence_score': confidence_score,
-                'explanation': explanation
-            })
-
+        # Get AI-powered recommendations
+        recommendations = generate_product_recommendations(products, preferences)
+        
         # Sort by confidence score
         recommendations.sort(key=lambda x: x['confidence_score'], reverse=True)
 
         response = jsonify({
             'success': True,
-            'recommendations': recommendations
+            'recommendations': recommendations[:6]  # Limit to top 6 recommendations
         })
         response.headers['Access-Control-Allow-Origin'] = request.headers.get('Origin', '*')
         response.headers['Access-Control-Allow-Credentials'] = 'true'
@@ -507,149 +586,6 @@ def get_mistral_recommendations():
         }), 500
     finally:
         shopify.ShopifyResource.clear_session()
-
-def generate_product_explanation(product, keywords, price_range):
-    """Generate a personalized explanation for why this product matches the user's preferences"""
-    reasons = []
-    
-    # Price-based reason
-    price = float(product.variants[0].price)
-    if price_range:
-        min_price, max_price = map(lambda x: float(x) if x != '+' else float('inf'), 
-                                price_range.split('-'))
-        if price <= min_price:
-            reasons.append(f"Great value: This product is within your budget at £{price:.2f}")
-        elif price <= max_price:
-            reasons.append(f"Good price point: Fits your budget range at £{price:.2f}")
-    
-    # Keyword matching with detailed explanations
-    if keywords:
-        matching_features = []
-        for keyword in keywords:
-            keyword = keyword.lower().strip()
-            if not keyword:
-                continue
-                
-            if keyword in product.title.lower():
-                matching_features.append(f"Features {keyword} design")
-            elif keyword in product.product_type.lower():
-                matching_features.append(f"Matches your {keyword} preference")
-            elif any(keyword in tag.lower() for tag in product.tags):
-                matching_features.append(f"Tagged as {keyword}")
-            elif keyword in product.body_html.lower():
-                matching_features.append(f"Includes {keyword} features")
-        
-        if matching_features:
-            reasons.append("Matches your preferences: " + ", ".join(matching_features))
-    
-    # Product type match with context
-    if product.product_type:
-        reasons.append(f"Perfect category match: {product.product_type}")
-    
-    # Extract and add key product features
-    if product.body_html:
-        features = extract_key_features(product.body_html)
-        if features:
-            reasons.append(f"Standout features: {features}")
-    
-    # Add product-specific highlights
-    if product.tags:
-        relevant_tags = [tag for tag in product.tags if any(
-            keyword.lower() in tag.lower() 
-            for keyword in keywords
-        )] if keywords else []
-        
-        if relevant_tags:
-            reasons.append(f"Matching qualities: {', '.join(relevant_tags)}")
-    
-    return "\n".join(reasons)
-
-def extract_key_features(description):
-    """Extract key features from product description"""
-    # Remove HTML tags
-    clean_desc = re.sub(r'<[^>]+>', '', description)
-    
-    # Extract sentences containing feature indicators
-    feature_indicators = ['features', 'includes', 'made with', 'perfect for', 'ideal for', 'designed for']
-    features = []
-    
-    sentences = clean_desc.split('.')
-    for sentence in sentences:
-        if any(indicator in sentence.lower() for indicator in feature_indicators):
-            features.append(sentence.strip())
-    
-    return '; '.join(features[:2])  # Return top 2 feature sentences
-
-def calculate_confidence_score(product, preferences):
-    """Calculate a confidence score for how well the product matches preferences"""
-    score = 0.5  # Base score
-    
-    # Price range match (30% weight)
-    if preferences.get('price_range'):
-        price = float(product.variants[0].price)
-        min_price, max_price = map(lambda x: float(x) if x != '+' else float('inf'), 
-                                preferences['price_range'].split('-'))
-        if min_price <= price <= max_price:
-            price_match = 1.0
-            # Bonus for being in the middle of the range
-            price_range_mid = (min_price + max_price) / 2 if max_price != float('inf') else min_price * 1.5
-            price_distance = abs(price - price_range_mid) / price_range_mid
-            price_match -= min(0.5, price_distance)  # Reduce score based on distance from middle
-            score += price_match * 0.3
-    
-    # Category match (30% weight)
-    if preferences.get('category'):
-        category = preferences['category'].lower()
-        product_type = product.product_type.lower()
-        if category == product_type:
-            score += 0.3
-        elif category in product_type or product_type in category:
-            score += 0.15
-        # Check tags for category matches
-        elif any(category in tag.lower() for tag in product.tags):
-            score += 0.1
-    
-    # Keyword matches (40% weight)
-    if preferences.get('keywords'):
-        product_text = (
-            f"{product.title} {product.body_html} {product.product_type} {' '.join(product.tags)}"
-        ).lower()
-        
-        keyword_scores = []
-        for keyword in preferences['keywords']:
-            keyword = keyword.lower().strip()
-            if not keyword:
-                continue
-                
-            # Exact match in title (highest weight)
-            if keyword in product.title.lower():
-                keyword_scores.append(1.0)
-            # Match in product type
-            elif keyword in product.product_type.lower():
-                keyword_scores.append(0.8)
-            # Match in tags
-            elif any(keyword in tag.lower() for tag in product.tags):
-                keyword_scores.append(0.7)
-            # Match in description
-            elif keyword in product.body_html.lower():
-                keyword_scores.append(0.6)
-            else:
-                # Check for partial matches
-                partial_matches = [
-                    word for word in product_text.split()
-                    if keyword in word or word in keyword
-                ]
-                if partial_matches:
-                    keyword_scores.append(0.3)
-                else:
-                    keyword_scores.append(0)
-        
-        # Average keyword scores and apply weight
-        if keyword_scores:
-            keyword_score = sum(keyword_scores) / len(keyword_scores)
-            score += keyword_score * 0.4
-    
-    return min(1.0, score)  # Cap at 1.0
 
 @app.route('/auth/callback')
 def callback():

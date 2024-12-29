@@ -1,237 +1,192 @@
-class SmartAdvisor {
-  constructor() {
-    if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', () => this.initialize());
-    } else {
-      this.initialize();
-    }
+class SmartProductAdvisor {
+  constructor(container) {
+    this.container = container;
+    this.apiUrl = container.dataset.apiUrl || 'https://smart-product-advisor.onrender.com';
+    this.shopDomain = container.dataset.shopDomain;
+    
+    // Elements
+    this.button = container.querySelector('.smart-advisor-button');
+    this.modal = container.querySelector('.smart-advisor-modal');
+    this.overlay = container.querySelector('.modal-overlay');
+    this.closeButton = container.querySelector('.close-modal');
+    this.form = container.querySelector('#advisor-form');
+    this.recommendationsContainer = container.querySelector('#recommendations-container');
+    this.loadingIndicator = this.recommendationsContainer.querySelector('.loading-indicator');
+    this.errorMessage = this.recommendationsContainer.querySelector('.error-message');
+    this.retryButton = this.errorMessage.querySelector('.retry-button');
+    
+    this.isVisible = false;
+    this.setupEventListeners();
+    this.setupScrollTrigger();
   }
 
-  initialize() {
-    this.container = document.querySelector('.smart-advisor-container');
-    if (!this.container) return;
-    
-    this.button = this.container.querySelector('.smart-advisor-button');
-    this.modal = this.container.querySelector('.smart-advisor-modal');
-    this.closeButton = this.container.querySelector('.close-modal');
-    this.form = this.container.querySelector('#advisor-form');
-    
-    this.apiUrl = this.container.dataset.apiUrl || 'https://smart-product-advisor.onrender.com';
-    this.shopDomain = this.container.dataset.shopDomain;
-    this.productId = this.container.dataset.productId;
-    this.hasShown = false;
-    this.isLoading = false;
-    
-    this.init();
-  }
-
-  init() {
-    if (!this.button || !this.modal || !this.closeButton || !this.form) {
-      console.error('Required elements not found');
-      return;
-    }
-    
-    this.initScrollBehavior();
-    
+  setupEventListeners() {
+    // Show modal
     this.button.addEventListener('click', () => this.openModal());
-    this.closeButton.addEventListener('click', (e) => {
-      e.stopPropagation();
-      this.closeModal();
-    });
+    
+    // Close modal
+    this.closeButton.addEventListener('click', () => this.closeModal());
+    this.overlay.addEventListener('click', () => this.closeModal());
+    
+    // Handle form submission
     this.form.addEventListener('submit', (e) => this.handleSubmit(e));
     
-    document.addEventListener('click', (e) => {
-      if (this.modal.classList.contains('active') && 
-          !this.modal.contains(e.target) && 
-          !this.button.contains(e.target)) {
-        this.closeModal();
-      }
+    // Retry button
+    this.retryButton.addEventListener('click', () => {
+      this.errorMessage.style.display = 'none';
+      this.handleSubmit(new Event('submit'));
     });
-
-    this.modal.addEventListener('click', (e) => {
-      e.stopPropagation();
-    });
-
+    
+    // Close on escape key
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape' && this.modal.classList.contains('active')) {
         this.closeModal();
       }
     });
-
-    this.container.style.display = 'none';
   }
 
-  initScrollBehavior() {
+  setupScrollTrigger() {
     let lastScrollPosition = 0;
-    const scrollThreshold = 30;
+    let scrollTimeout;
 
-    const checkScroll = () => {
-      const scrollPosition = window.scrollY;
-      const documentHeight = document.documentElement.scrollHeight - window.innerHeight;
-      const scrollPercentage = (scrollPosition / documentHeight) * 100;
-
-      if (scrollPercentage >= scrollThreshold && !this.hasShown) {
-        this.container.style.display = 'block';
-        setTimeout(() => {
+    window.addEventListener('scroll', () => {
+      clearTimeout(scrollTimeout);
+      
+      scrollTimeout = setTimeout(() => {
+        const currentScroll = window.scrollY;
+        const scrollPercent = (currentScroll / (document.documentElement.scrollHeight - window.innerHeight)) * 100;
+        
+        if (scrollPercent >= 30 && currentScroll > lastScrollPosition && !this.isVisible) {
           this.container.classList.add('visible');
-        }, 10);
-        this.hasShown = true;
-      }
-
-      if (scrollPosition < 100 && scrollPosition < lastScrollPosition) {
-        this.container.classList.remove('visible');
-        setTimeout(() => {
-          this.container.style.display = 'none';
-        }, 300);
-        this.hasShown = false;
-      }
-
-      lastScrollPosition = scrollPosition;
-    };
-
-    checkScroll();
-    window.addEventListener('scroll', checkScroll);
+          this.isVisible = true;
+        }
+        
+        lastScrollPosition = currentScroll;
+      }, 100);
+    });
   }
 
   openModal() {
     this.modal.classList.add('active');
-    document.body.style.overflow = 'hidden';
+    this.overlay.classList.add('active');
+    document.body.classList.add('modal-open');
+    
+    // Reset form and containers
+    this.form.reset();
+    this.recommendationsContainer.innerHTML = '';
+    this.loadingIndicator.style.display = 'none';
+    this.errorMessage.style.display = 'none';
   }
 
   closeModal() {
-    if (this.isLoading) return;
-    
     this.modal.classList.remove('active');
-    document.body.style.overflow = '';
-    this.button.style.transform = 'scale(0.95)';
-    setTimeout(() => {
-      this.button.style.transform = '';
-      this.form.reset();
-      document.getElementById('recommendations-container').innerHTML = '';
-    }, 200);
+    this.overlay.classList.remove('active');
+    document.body.classList.remove('modal-open');
   }
 
   async handleSubmit(e) {
     e.preventDefault();
-    if (this.isLoading) return;
-
-    const submitButton = this.form.querySelector('.submit-button');
-    const buttonText = submitButton.querySelector('.button-text');
-    const originalText = buttonText.textContent;
-    const recommendationsContainer = document.getElementById('recommendations-container');
     
-    this.isLoading = true;
-    submitButton.disabled = true;
-    buttonText.textContent = 'Finding your perfect match...';
-    recommendationsContainer.innerHTML = '<div class="loading">Analyzing your preferences with AI...</div>';
-
-    const formData = new FormData(this.form);
-    const userQuery = {
-      preferences: {
-        price_range: formData.get('price_range'),
-        category: formData.get('category'),
-        keywords: formData.get('keywords').split(',').map(k => k.trim()).filter(k => k)
-      },
-      context: {
-        shop_domain: this.shopDomain,
-        current_product: this.productId,
-        time_of_day: new Date().getHours(),
-        device_type: /Mobile|Android|iPhone/i.test(navigator.userAgent) ? 'mobile' : 'desktop',
-        user_preferences: {
-          price_sensitivity: formData.get('price_range').startsWith('0-') ? 'high' : 'moderate',
-          style_preferences: formData.get('keywords').toLowerCase().includes('modern') ? 'modern' : 'classic'
-        }
-      }
-    };
-
+    const form = e.target;
+    const submitButton = form.querySelector('.submit-button');
+    const buttonText = submitButton.querySelector('.button-text');
+    
     try {
-      console.log('Sending request to:', `${this.apiUrl}/api/mistral/recommend`);
-      console.log('Request data:', userQuery);
-
+      // Show loading state
+      submitButton.disabled = true;
+      buttonText.textContent = 'Finding matches...';
+      this.loadingIndicator.style.display = 'flex';
+      this.errorMessage.style.display = 'none';
+      
+      // Get form data
+      const formData = new FormData(form);
+      const keywords = formData.get('keywords').split(',').map(k => k.trim()).filter(Boolean);
+      
+      const data = {
+        preferences: {
+          price_range: formData.get('price_range'),
+          category: formData.get('category'),
+          keywords: keywords
+        }
+      };
+      
+      // Make API request
       const response = await fetch(`${this.apiUrl}/api/mistral/recommend`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Accept': 'application/json',
           'X-Shop-Domain': this.shopDomain
         },
-        body: JSON.stringify(userQuery),
-        credentials: 'include'
+        body: JSON.stringify(data)
       });
-
-      console.log('Response status:', response.status);
-      const responseText = await response.text();
-      console.log('Response text:', responseText);
-
+      
       if (!response.ok) {
-        throw new Error(`Failed to get recommendations: ${response.status} ${responseText}`);
+        throw new Error('Failed to get recommendations');
       }
-
-      const result = JSON.parse(responseText);
-      console.log('Parsed response:', result);
-
-      if (result.recommendations && result.recommendations.length > 0) {
-        this.displayRecommendations(result.recommendations);
-      } else {
-        recommendationsContainer.innerHTML = `
-          <div class="no-results">
-            <p>No matching products found for your criteria.</p>
-            <p>Try adjusting your preferences or using different keywords.</p>
-          </div>
-        `;
+      
+      const result = await response.json();
+      
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to get recommendations');
       }
+      
+      // Display recommendations
+      this.displayRecommendations(result.recommendations);
+      
     } catch (error) {
       console.error('Error getting recommendations:', error);
-      recommendationsContainer.innerHTML = `
-        <div class="error-message">
-          <p>Sorry, we couldn't get recommendations at this time.</p>
-          <p>Please try again later.</p>
-          <small class="error-details">${error.message}</small>
-        </div>
-      `;
+      this.loadingIndicator.style.display = 'none';
+      this.errorMessage.style.display = 'block';
+      
     } finally {
-      this.isLoading = false;
+      // Reset button state
       submitButton.disabled = false;
-      buttonText.textContent = originalText;
+      buttonText.textContent = 'Find Perfect Matches';
+      this.loadingIndicator.style.display = 'none';
     }
   }
 
   displayRecommendations(recommendations) {
-    const container = document.getElementById('recommendations-container');
+    this.recommendationsContainer.innerHTML = '';
+    
     if (!recommendations || recommendations.length === 0) {
-      container.innerHTML = `
-        <div class="no-results">
-          <p>No matching products found.</p>
-          <p>Try adjusting your preferences.</p>
-        </div>
+      const noResults = document.createElement('div');
+      noResults.className = 'no-results';
+      noResults.innerHTML = `
+        <p>No matching products found.</p>
+        <p>Try adjusting your preferences and search again.</p>
       `;
+      this.recommendationsContainer.appendChild(noResults);
       return;
     }
-
-    container.innerHTML = recommendations.map(rec => {
-      const matchScore = Math.round((rec.confidence_score || 0.7) * 100);
+    
+    recommendations.forEach(rec => {
+      const card = document.createElement('div');
+      card.className = 'product-card';
       
-      return `
-        <div class="product-card">
-          <div class="product-image-container">
-            ${rec.product.image_url ? 
-              `<img src="${rec.product.image_url}" alt="${rec.product.title}" loading="lazy">` :
-              '<div class="no-image">No image available</div>'
-            }
-          </div>
-          <span class="match-score">${matchScore}% Match</span>
-          <h3>${rec.product.title}</h3>
-          <p class="price">£${rec.product.price}</p>
-          <div class="reasons">
-            ${rec.explanation.split('\n').map(reason => `
-              <p class="reason">✓ ${reason.trim()}</p>
-            `).join('')}
-          </div>
-          <a href="${rec.product.url}" class="view-product" target="_blank">View Details</a>
+      const confidence = Math.round(rec.confidence_score * 100);
+      
+      card.innerHTML = `
+        <div class="product-image-container">
+          ${rec.product.image_url ? `<img src="${rec.product.image_url}" alt="${rec.product.title}">` : ''}
         </div>
+        <h3>${rec.product.title}</h3>
+        <div class="price">£${rec.product.price.toFixed(2)}</div>
+        <div class="match-score">
+          <div class="score-bar" style="--score: ${confidence}%"></div>
+          <span>${confidence}% match</span>
+        </div>
+        <div class="explanation">${rec.explanation}</div>
+        <a href="${rec.product.url}" class="view-product" target="_blank">View Product</a>
       `;
-    }).join('');
+      
+      this.recommendationsContainer.appendChild(card);
+    });
   }
 }
 
-new SmartAdvisor(); 
+// Initialize
+document.addEventListener('DOMContentLoaded', () => {
+  const containers = document.querySelectorAll('.smart-advisor-container');
+  containers.forEach(container => new SmartProductAdvisor(container));
+}); 
