@@ -530,62 +530,94 @@ Provide recommendations for the most suitable products. Return only the JSON arr
 
 @app.route('/api/mistral/recommend', methods=['POST', 'OPTIONS'])
 def get_mistral_recommendations():
-    """API endpoint to get AI-powered product recommendations using local Mistral"""
+    """API endpoint to get AI-powered product recommendations using Hugging Face"""
     if request.method == 'OPTIONS':
         response = Response()
         response.headers['Access-Control-Allow-Origin'] = request.headers.get('Origin', '*')
         response.headers['Access-Control-Allow-Methods'] = 'POST'
-        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, X-Shop-Domain'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, X-Shop-Domain, Origin'
         response.headers['Access-Control-Allow-Credentials'] = 'true'
         return response
 
     try:
+        # Log request details
+        logger.info("=== New Recommendation Request ===")
+        logger.info(f"Headers: {dict(request.headers)}")
+        logger.info(f"Request data: {request.get_data(as_text=True)}")
+        
         data = request.json
         shop_domain = request.headers.get('X-Shop-Domain')
         if not shop_domain:
+            logger.error("Missing shop domain header")
             return jsonify({'error': 'Missing shop domain'}), 400
 
-        logger.info(f"Getting Mistral recommendations for shop: {shop_domain}")
-        logger.info(f"Request data: {data}")
+        logger.info(f"Getting recommendations for shop: {shop_domain}")
 
         # Get all products
         try:
-            products = shopify.Product.find(limit=20)
-        except Exception as e:
-            logger.error(f"Error fetching products: {str(e)}")
             # Initialize Shopify session
+            logger.info("Setting up Shopify session...")
             shopify.Session.setup(api_key=SHOPIFY_API_KEY, secret=SHOPIFY_API_SECRET)
             shopify_session = shopify.Session(shop_domain, API_VERSION)
             shopify_session.token = session.get('access_token')
+            logger.info(f"Access token from session: {session.get('access_token')}")
+            
             shopify.ShopifyResource.activate_session(shopify_session)
+            logger.info("Fetching products...")
             products = shopify.Product.find(limit=20)
+            logger.info(f"Found {len(products)} products")
+            
+        except Exception as e:
+            logger.error(f"Error fetching products: {str(e)}")
+            logger.error(traceback.format_exc())
+            return jsonify({
+                'success': False,
+                'error': f'Failed to fetch products: {str(e)}'
+            }), 500
         
         # Extract user preferences
         preferences = data.get('preferences', {})
+        logger.info(f"User preferences: {preferences}")
         
         # Get AI-powered recommendations
-        recommendations = generate_product_recommendations(products, preferences)
-        
-        # Sort by confidence score
-        recommendations.sort(key=lambda x: x['confidence_score'], reverse=True)
+        try:
+            logger.info("Generating recommendations...")
+            recommendations = generate_product_recommendations(products, preferences)
+            logger.info(f"Generated {len(recommendations)} recommendations")
+            
+            # Sort by confidence score
+            recommendations.sort(key=lambda x: x['confidence_score'], reverse=True)
+            recommendations = recommendations[:6]  # Limit to top 6 recommendations
+            
+        except Exception as e:
+            logger.error(f"Error generating recommendations: {str(e)}")
+            logger.error(traceback.format_exc())
+            return jsonify({
+                'success': False,
+                'error': f'Failed to generate recommendations: {str(e)}'
+            }), 500
 
         response = jsonify({
             'success': True,
-            'recommendations': recommendations[:6]  # Limit to top 6 recommendations
+            'recommendations': recommendations
         })
         response.headers['Access-Control-Allow-Origin'] = request.headers.get('Origin', '*')
         response.headers['Access-Control-Allow-Credentials'] = 'true'
         return response
 
     except Exception as e:
-        logger.error(f"Mistral recommendations error: {str(e)}")
+        logger.error("=== Recommendation Request Failed ===")
+        logger.error(f"Error: {str(e)}")
         logger.error(traceback.format_exc())
         return jsonify({
             'success': False,
             'error': str(e)
         }), 500
     finally:
-        shopify.ShopifyResource.clear_session()
+        try:
+            shopify.ShopifyResource.clear_session()
+        except Exception as e:
+            logger.error(f"Error clearing session: {str(e)}")
 
 @app.route('/auth/callback')
 def callback():
