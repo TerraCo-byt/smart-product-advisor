@@ -79,54 +79,6 @@ if not SHOPIFY_API_KEY or not SHOPIFY_API_SECRET:
     logger.error("Missing Shopify API credentials!")
     raise ValueError("Missing required environment variables: SHOPIFY_API_KEY and SHOPIFY_API_SECRET")
 
-# Initialize Mistral client
-MISTRAL_API_KEY = os.environ.get('MISTRAL_API_KEY')
-if not MISTRAL_API_KEY:
-    logger.error("Missing Mistral API key!")
-    raise ValueError("Missing required environment variable: MISTRAL_API_KEY")
-
-MISTRAL_API_URL = "https://api.mistral.ai/v1/chat/completions"
-
-def get_mistral_recommendations(user_preferences, products):
-    """Get product recommendations using Mistral API"""
-    try:
-        headers = {
-            "Authorization": f"Bearer {MISTRAL_API_KEY}",
-            "Content-Type": "application/json"
-        }
-        
-        # Prepare the prompt
-        prompt = f"""Based on the following user preferences:
-        {user_preferences}
-        
-        And these available products:
-        {json.dumps(products, indent=2)}
-        
-        Recommend the top 3 most suitable products. For each recommendation, provide:
-        1. Product name
-        2. Why it matches the user's preferences
-        3. A confidence score (0-100)
-        
-        Format the response as a JSON array of objects with fields: name, explanation, confidence"""
-        
-        data = {
-            "model": "mistral-tiny",
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.7,
-            "max_tokens": 1000
-        }
-        
-        response = requests.post(MISTRAL_API_URL, headers=headers, json=data)
-        response.raise_for_status()
-        
-        result = response.json()
-        recommendations = json.loads(result['choices'][0]['message']['content'])
-        return recommendations
-        
-    except Exception as e:
-        logger.error(f"Error getting Mistral recommendations: {str(e)}")
-        return None
-
 # Hugging Face configuration
 HUGGINGFACE_API_TOKEN = os.environ.get('HUGGINGFACE_API_TOKEN')
 if not HUGGINGFACE_API_TOKEN:
@@ -565,7 +517,7 @@ Provide recommendations for the most suitable products. Return only the JSON arr
         raise
 
 @app.route('/api/mistral/recommend', methods=['POST', 'OPTIONS'])
-def get_mistral_recommendations():
+def get_recommendations_endpoint():
     """API endpoint to get AI-powered product recommendations using Hugging Face"""
     if request.method == 'OPTIONS':
         response = Response()
