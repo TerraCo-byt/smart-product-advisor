@@ -12,10 +12,6 @@ import base64
 import json
 from urllib.parse import urlencode, quote
 import re
-from mistralai.client import MistralClient
-from mistralai.models.chat_completion import ChatMessage
-import subprocess
-import tempfile
 import requests
 
 # Configure logging
@@ -89,7 +85,47 @@ if not MISTRAL_API_KEY:
     logger.error("Missing Mistral API key!")
     raise ValueError("Missing required environment variable: MISTRAL_API_KEY")
 
-mistral_client = MistralClient(api_key=MISTRAL_API_KEY)
+MISTRAL_API_URL = "https://api.mistral.ai/v1/chat/completions"
+
+def get_mistral_recommendations(user_preferences, products):
+    """Get product recommendations using Mistral API"""
+    try:
+        headers = {
+            "Authorization": f"Bearer {MISTRAL_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        
+        # Prepare the prompt
+        prompt = f"""Based on the following user preferences:
+        {user_preferences}
+        
+        And these available products:
+        {json.dumps(products, indent=2)}
+        
+        Recommend the top 3 most suitable products. For each recommendation, provide:
+        1. Product name
+        2. Why it matches the user's preferences
+        3. A confidence score (0-100)
+        
+        Format the response as a JSON array of objects with fields: name, explanation, confidence"""
+        
+        data = {
+            "model": "mistral-tiny",
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.7,
+            "max_tokens": 1000
+        }
+        
+        response = requests.post(MISTRAL_API_URL, headers=headers, json=data)
+        response.raise_for_status()
+        
+        result = response.json()
+        recommendations = json.loads(result['choices'][0]['message']['content'])
+        return recommendations
+        
+    except Exception as e:
+        logger.error(f"Error getting Mistral recommendations: {str(e)}")
+        return None
 
 # Hugging Face configuration
 HUGGINGFACE_API_TOKEN = os.environ.get('HUGGINGFACE_API_TOKEN')
