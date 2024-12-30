@@ -693,5 +693,52 @@ def app_page():
     finally:
         shopify.ShopifyResource.clear_session()
 
+@app.route('/')
+def home():
+    """Root route - redirects to install if shop parameter is present"""
+    try:
+        shop = request.args.get('shop')
+        if shop:
+            logger.info(f"Redirecting to install for shop: {shop}")
+            return redirect(f"/install?shop={shop}")
+        return "Welcome to Smart Product Advisor"
+    except Exception as e:
+        logger.error(f"Home route error: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/debug')
+def debug():
+    """Debug route to check configuration and session state"""
+    try:
+        debug_data = {
+            'api_key_present': bool(SHOPIFY_API_KEY),
+            'api_secret_present': bool(SHOPIFY_API_SECRET),
+            'app_url': APP_URL,
+            'current_api_version': API_VERSION,
+            'available_versions': AVAILABLE_VERSIONS,
+            'session_api_version': session.get('api_version'),
+            'session': dict(session),
+            'request_args': dict(request.args),
+            'headers': dict(request.headers)
+        }
+        logger.info("Debug info requested")
+        return jsonify(debug_data)
+    except Exception as e:
+        logger.error(f"Debug route error: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+# Error handlers
+@app.errorhandler(404)
+def not_found_error(error):
+    logger.error(f"404 error: {error}")
+    return jsonify({"error": "Not found"}), 404
+
+@app.errorhandler(500)
+def internal_error(error):
+    logger.error(f"500 error: {error}")
+    return jsonify({"error": "Internal server error"}), 500
+
 if __name__ == '__main__':
-    app.run(debug=True) 
+    port = int(os.environ.get('PORT', 8000))
+    logger.info(f"Starting server on port {port}")
+    app.run(host='0.0.0.0', port=port) 
