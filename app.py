@@ -34,21 +34,26 @@ app.config.update(
     PERMANENT_SESSION_LIFETIME=3600
 )
 
-# Allow all origins for CORS
-CORS(app, supports_credentials=True, resources={
+# Allow all origins for CORS with proper configuration
+CORS(app, resources={
     r"/*": {
-        "origins": "*",
-        "allow_headers": ["Content-Type", "Authorization"],
-        "methods": ["GET", "POST", "OPTIONS"]
+        "origins": ["https://*.myshopify.com", "https://admin.shopify.com"],
+        "methods": ["GET", "POST", "OPTIONS"],
+        "allow_headers": ["Content-Type", "X-Shop-Domain", "Authorization", "Origin"],
+        "supports_credentials": True,
+        "expose_headers": ["Content-Range", "X-Content-Range"]
     }
 })
 
 @app.after_request
 def after_request(response):
-    """Ensure proper headers for session cookies"""
-    if 'Set-Cookie' in response.headers:
-        response.headers.add('Access-Control-Allow-Credentials', 'true')
-        response.headers.add('Access-Control-Allow-Origin', request.headers.get('Origin', '*'))
+    """Ensure proper headers for session cookies and CORS"""
+    origin = request.headers.get('Origin', '')
+    if origin and ('.myshopify.com' in origin or 'admin.shopify.com' in origin):
+        response.headers['Access-Control-Allow-Origin'] = origin
+        response.headers['Access-Control-Allow-Credentials'] = 'true'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, X-Shop-Domain, Authorization, Origin'
     return response
 
 # Configuration
@@ -254,11 +259,15 @@ Provide the best product recommendations as a JSON array."""
 def get_recommendations():
     """API endpoint to get AI-powered product recommendations"""
     if request.method == 'OPTIONS':
+        # Handle preflight request
         response = Response()
-        response.headers['Access-Control-Allow-Origin'] = request.headers.get('Origin', '*')
-        response.headers['Access-Control-Allow-Methods'] = 'POST'
-        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, X-Shop-Domain, Origin'
-        response.headers['Access-Control-Allow-Credentials'] = 'true'
+        origin = request.headers.get('Origin', '')
+        if origin and ('.myshopify.com' in origin or 'admin.shopify.com' in origin):
+            response.headers['Access-Control-Allow-Origin'] = origin
+            response.headers['Access-Control-Allow-Methods'] = 'POST, OPTIONS'
+            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, X-Shop-Domain, Authorization, Origin'
+            response.headers['Access-Control-Allow-Credentials'] = 'true'
+            response.headers['Access-Control-Max-Age'] = '3600'
         return response
 
     try:
@@ -374,8 +383,13 @@ def get_recommendations():
             'success': True,
             'recommendations': recommendations
         })
-        response.headers['Access-Control-Allow-Origin'] = request.headers.get('Origin', '*')
-        response.headers['Access-Control-Allow-Credentials'] = 'true'
+        
+        # Set CORS headers for the response
+        origin = request.headers.get('Origin', '')
+        if origin and ('.myshopify.com' in origin or 'admin.shopify.com' in origin):
+            response.headers['Access-Control-Allow-Origin'] = origin
+            response.headers['Access-Control-Allow-Credentials'] = 'true'
+        
         return response
 
     except Exception as e:
