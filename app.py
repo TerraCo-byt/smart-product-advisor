@@ -31,7 +31,7 @@ app.secret_key = os.environ.get('FLASK_SECRET_KEY', os.urandom(32))
 app.config.update(
     SESSION_COOKIE_SECURE=True,
     SESSION_COOKIE_HTTPONLY=True,
-    SESSION_COOKIE_SAMESITE='Lax',
+    SESSION_COOKIE_SAMESITE='None',
     PERMANENT_SESSION_LIFETIME=datetime.timedelta(days=1),
     SESSION_COOKIE_NAME='sp_session',
 )
@@ -57,9 +57,14 @@ def after_request(response):
         response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
         response.headers['Access-Control-Allow-Headers'] = 'Content-Type, X-Shop-Domain, Authorization, Origin'
         
-        # Ensure cookies are set correctly
+        # Set SameSite=None and Secure for all cookies
         if 'Set-Cookie' in response.headers:
-            response.headers['Set-Cookie'] = response.headers['Set-Cookie'].replace('SameSite=None', 'SameSite=Lax')
+            cookies = response.headers.getlist('Set-Cookie')
+            response.headers.remove('Set-Cookie')
+            for cookie in cookies:
+                if 'SameSite=' not in cookie:
+                    cookie += '; SameSite=None; Secure'
+                response.headers.add('Set-Cookie', cookie)
     return response
 
 # Configuration
@@ -594,6 +599,7 @@ def app_page():
                     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
                     <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
                     <script>
+                        // Initialize app-bridge with embedded app requirements
                         var AppBridge = window['app-bridge'];
                         var createApp = AppBridge.default;
                         var app = createApp({{
@@ -601,6 +607,15 @@ def app_page():
                             host: window.location.search.substring(1).split('=')[1],
                             forceRedirect: true
                         }});
+
+                        // Set up app-bridge actions
+                        var actions = AppBridge.actions;
+                        var TitleBar = actions.TitleBar;
+                        var Button = actions.Button;
+                        var titleBarOptions = {{
+                            title: 'Smart Product Advisor',
+                        }};
+                        var titleBar = TitleBar.create(app, titleBarOptions);
                     </script>
                 </head>
                 <body class="bg-gray-100">
@@ -731,9 +746,10 @@ def app_page():
             </html>
             """)
             
-            # Set cookie headers
+            # Set cookie headers for embedded app
             response.headers['Cache-Control'] = 'no-store'
-            response.headers['Set-Cookie'] = f'sp_session={session.sid}; Path=/; HttpOnly; Secure; SameSite=Lax'
+            cookie = f'sp_session={session.sid}; Path=/; HttpOnly; Secure; SameSite=None'
+            response.headers['Set-Cookie'] = cookie
             
             return response
             
