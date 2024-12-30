@@ -4,6 +4,7 @@ import logging
 import traceback
 from flask import Flask, request, jsonify, redirect, session, Response, make_response
 from flask_cors import CORS
+from flask.sessions import SessionInterface
 import shopify
 from shopify import ApiVersion
 import hmac
@@ -30,14 +31,17 @@ app.secret_key = os.environ.get('FLASK_SECRET_KEY', os.urandom(32))
 
 # Configure session with more robust settings
 app.config.update(
+    SESSION_TYPE='filesystem',  # Use filesystem instead of Redis for now
     SESSION_COOKIE_SECURE=True,
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE='None',  # Required for embedded apps
     PERMANENT_SESSION_LIFETIME=datetime.timedelta(days=1),
     SESSION_COOKIE_NAME='sp_session',
-    SESSION_COOKIE_DOMAIN=None,  # Allow dynamic domain setting
     SESSION_REFRESH_EACH_REQUEST=True,
 )
+
+# Initialize Flask-Session
+Session(app)
 
 # Custom session interface to handle embedded app requirements
 class ShopifySessionInterface(SessionInterface):
@@ -92,7 +96,7 @@ CORS(app, resources={
         "methods": ["GET", "POST", "OPTIONS"],
         "allow_headers": ["Content-Type", "X-Shop-Domain", "Authorization", "Origin", "Cookie"],
         "supports_credentials": True,
-        "expose_headers": ["Set-Cookie", "Content-Range", "X-Content-Range"]
+        "expose_headers": ["Set-Cookie"]
     }
 })
 
@@ -534,6 +538,7 @@ def callback():
             # Store token in session
             session['access_token'] = access_token
             session['shop'] = shop
+            session.permanent = True
             
             # Activate Shopify session
             shopify_session.token = access_token
@@ -547,10 +552,18 @@ def callback():
                 logger.error(f"Failed to verify shop access: {str(e)}")
                 return redirect(f"/install?shop={shop}")
             
-            # Redirect to app page
+            # Create response with proper cookie handling
             app_url = f"{APP_URL}/app?shop={shop}"
-            logger.info(f"Redirecting to app page: {app_url}")
-            return redirect(app_url)
+            response = make_response(redirect(app_url))
+            response.set_cookie(
+                'sp_session',
+                session.sid,
+                secure=True,
+                httponly=True,
+                samesite='None',
+                path='/'
+            )
+            return response
             
         except Exception as e:
             logger.error(f"Error requesting access token: {str(e)}")
@@ -560,6 +573,8 @@ def callback():
         logger.error(f"Callback error: {str(e)}")
         logger.error(traceback.format_exc())
         return redirect(f"/install?shop={shop}")
+    finally:
+        shopify.ShopifyResource.clear_session()
 
 @app.route('/install')
 def install():
@@ -603,7 +618,19 @@ def install():
                 )
                 logger.info(f"Successfully created auth URL with API version {version}: {auth_url}")
                 session['api_version'] = version  # Store working version
-                return redirect(auth_url)
+                
+                # Create response with cookie
+                response = make_response(redirect(auth_url))
+                response.set_cookie(
+                    'sp_session',
+                    session.sid,
+                    secure=True,
+                    httponly=True,
+                    samesite='None',
+                    path='/'
+                )
+                return response
+                
             except Exception as e:
                 logger.warning(f"Failed to use API version {version}: {str(e)}")
                 continue
