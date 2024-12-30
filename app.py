@@ -31,87 +31,65 @@ app.secret_key = os.environ.get('FLASK_SECRET_KEY', os.urandom(32))
 
 # Configure session with more robust settings
 app.config.update(
-    SESSION_TYPE='filesystem',  # Use filesystem instead of Redis for now
+    SESSION_TYPE='filesystem',
     SESSION_COOKIE_SECURE=True,
     SESSION_COOKIE_HTTPONLY=True,
-    SESSION_COOKIE_SAMESITE='None',  # Required for embedded apps
+    SESSION_COOKIE_SAMESITE='None',
     PERMANENT_SESSION_LIFETIME=datetime.timedelta(days=1),
     SESSION_COOKIE_NAME='sp_session',
+    SESSION_COOKIE_DOMAIN=None,  # Allow dynamic domain setting
     SESSION_REFRESH_EACH_REQUEST=True,
 )
 
 # Initialize Flask-Session
 Session(app)
 
-# Custom session interface to handle embedded app requirements
-class ShopifySessionInterface(SessionInterface):
-    def open_session(self, app, request):
-        sid = request.cookies.get(app.config['SESSION_COOKIE_NAME'])
-        if not sid:
-            sid = base64.b64encode(os.urandom(32)).decode('utf-8')
-        shop = request.args.get('shop', '')
-        s = Session()
-        s.sid = sid
-        s.shop = shop
-        s.permanent = True
-        return s
+# Allow all origins for CORS
+CORS(app, 
+     supports_credentials=True,
+     resources={
+        r"/*": {
+            "origins": ["https://*.myshopify.com", "https://admin.shopify.com", "https://partners.shopify.com"],
+            "methods": ["GET", "POST", "OPTIONS"],
+            "allow_headers": ["Content-Type", "X-Shop-Domain", "Authorization", "Origin", "Cookie", "X-Requested-With"],
+            "expose_headers": ["Set-Cookie"],
+            "supports_credentials": True,
+            "max_age": 3600
+        }
+     })
 
-    def save_session(self, app, session, response):
-        domain = self.get_cookie_domain(app)
-        path = self.get_cookie_path(app)
-        
-        # Always set SameSite=None for embedded apps
-        if not session:
-            response.delete_cookie(
-                app.config['SESSION_COOKIE_NAME'],
-                domain=domain,
-                path=path
-            )
-            return
+@app.before_request
+def before_request():
+    """Setup request context"""
+    if request.method == 'OPTIONS':
+        return _build_cors_preflight_response()
+    
+    # Handle authentication
+    shop = request.args.get('shop', request.headers.get('X-Shop-Domain'))
+    if shop:
+        session['shop'] = shop
 
-        if isinstance(response, Response):
-            http_only = app.config['SESSION_COOKIE_HTTPONLY']
-            secure = app.config['SESSION_COOKIE_SECURE']
-            expires = self.get_expiration_time(app, session)
-            
-            # Set cookie with proper flags
-            response.set_cookie(
-                app.config['SESSION_COOKIE_NAME'],
-                session.sid,
-                expires=expires,
-                httponly=http_only,
-                domain=domain,
-                path=path,
-                secure=secure,
-                samesite='None'  # Required for embedded apps
-            )
-
-# Use custom session interface
-app.session_interface = ShopifySessionInterface()
-
-# Allow all origins for CORS with proper configuration
-CORS(app, resources={
-    r"/*": {
-        "origins": ["https://*.myshopify.com", "https://admin.shopify.com", "https://partners.shopify.com"],
-        "methods": ["GET", "POST", "OPTIONS"],
-        "allow_headers": ["Content-Type", "X-Shop-Domain", "Authorization", "Origin", "Cookie"],
-        "supports_credentials": True,
-        "expose_headers": ["Set-Cookie"]
-    }
-})
+def _build_cors_preflight_response():
+    """Build CORS preflight response"""
+    response = make_response()
+    response.headers.add("Access-Control-Allow-Origin", request.headers.get('Origin', '*'))
+    response.headers.add('Access-Control-Allow-Headers', "*")
+    response.headers.add('Access-Control-Allow-Methods', "*")
+    response.headers.add('Access-Control-Allow-Credentials', 'true')
+    return response
 
 @app.after_request
 def after_request(response):
-    """Ensure proper headers for session cookies and CORS"""
+    """Ensure proper headers for cookies and CORS"""
     origin = request.headers.get('Origin', '')
-    shop_domain = request.args.get('shop', request.headers.get('X-Shop-Domain', ''))
     
-    if origin and ('.myshopify.com' in origin or 'admin.shopify.com' in origin or 'partners.shopify.com' in origin):
+    if origin and ('.myshopify.com' in origin or 'admin.shopify.com' in origin):
         response.headers['Access-Control-Allow-Origin'] = origin
         response.headers['Access-Control-Allow-Credentials'] = 'true'
-        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
-        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, X-Shop-Domain, Authorization, Origin, Cookie'
-        response.headers['Access-Control-Expose-Headers'] = 'Set-Cookie'
+        
+        # Set frame ancestors for embedded app
+        response.headers['Content-Security-Policy'] = f"frame-ancestors 'self' {origin} https://admin.shopify.com https://*.myshopify.com;"
+        response.headers['X-Frame-Options'] = 'ALLOWALL'
         
         # Handle cookies
         if 'Set-Cookie' in response.headers:
@@ -119,16 +97,11 @@ def after_request(response):
             response.headers.remove('Set-Cookie')
             for cookie in cookies:
                 if 'SameSite=' not in cookie:
-                    cookie += '; SameSite=None; Secure'
+                    cookie += '; SameSite=None'
                 if 'Secure' not in cookie:
                     cookie += '; Secure'
                 response.headers.add('Set-Cookie', cookie)
-                
-        # Add security headers
-        response.headers['X-Content-Type-Options'] = 'nosniff'
-        response.headers['X-Frame-Options'] = 'ALLOWALL'  # Required for embedded apps
-        response.headers['Content-Security-Policy'] = "frame-ancestors 'self' https://*.myshopify.com https://admin.shopify.com;"
-        
+    
     return response
 
 # Configuration
@@ -677,279 +650,184 @@ def app_page():
             logger.info(f"Loading app page for shop: {shop_data.name}")
             
             # Return the app HTML
-            response = make_response(f"""
+            html_content = f"""
             <!DOCTYPE html>
             <html>
                 <head>
                     <title>Smart Product Advisor</title>
+                    <meta charset="utf-8">
+                    <meta name="viewport" content="width=device-width, initial-scale=1">
                     <script src="https://unpkg.com/@shopify/app-bridge@3"></script>
+                    <script src="https://unpkg.com/@shopify/app-bridge-utils"></script>
                     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
                     <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
-                    <script>
-                        // Initialize app-bridge with embedded app requirements
-                        var AppBridge = window['app-bridge'];
-                        var createApp = AppBridge.default;
-                        var actions = AppBridge.actions;
-                        var app = createApp({{
-                            apiKey: '{SHOPIFY_API_KEY}',
-                            host: window.location.search.substring(1).split('=')[1],
-                            forceRedirect: true
-                        }});
-
-                        // Set up app-bridge actions
-                        var TitleBar = actions.TitleBar;
-                        var Button = actions.Button;
-                        var Loading = actions.Loading;
-                        var Modal = actions.Modal;
-                        var Redirect = actions.Redirect;
-
-                        // Create title bar
-                        var titleBarOptions = {{
-                            title: 'Smart Product Advisor',
-                        }};
-                        var titleBar = TitleBar.create(app, titleBarOptions);
-
-                        // Handle session expiry
-                        function handleSessionExpiry(response) {{
-                            if (response.status === 401 || response.status === 403) {{
-                                const redirect = Redirect.create(app);
-                                redirect.dispatch(Redirect.Action.REMOTE, '/install?shop={shop}');
-                                return true;
-                            }}
-                            return false;
-                        }}
-
-                        // Function to get CSRF token from cookies
-                        function getCSRFToken() {{
-                            return document.cookie.split('; ').find(row => row.startsWith('sp_session='))?.split('=')[1];
-                        }}
-
-                        function getRecommendations() {{
-                            const priceRange = document.getElementById('priceRange').value;
-                            const category = document.getElementById('category').value;
-                            const preferences = document.getElementById('preferences').value;
-
-                            // Show loading state using app-bridge
-                            const loading = Loading.create(app);
-                            loading.dispatch(Loading.Action.START);
-
-                            // Hide previous recommendations
-                            document.getElementById('recommendationsList').classList.add('hidden');
-
-                            // Make API call to get recommendations
-                            fetch('{APP_URL}/api/recommendations', {{
-                                method: 'POST',
-                                headers: {{
-                                    'Content-Type': 'application/json',
-                                    'X-Shop-Domain': '{shop}',
-                                    'X-CSRF-Token': getCSRFToken()
-                                }},
-                                credentials: 'include',
-                                body: JSON.stringify({{
-                                    preferences: {{
-                                        price_range: priceRange,
-                                        category: category,
-                                        keywords: preferences.split(',').map(k => k.trim())
-                                    }}
-                                }})
-                            }})
-                            .then(response => {{
-                                if (handleSessionExpiry(response)) {{
-                                    throw new Error('Session expired');
-                                }}
-                                if (!response.ok) {{
-                                    return response.json().then(data => {{
-                                        throw new Error(data.error || `HTTP error! status: ${{response.status}}`);
-                                    }});
-                                }}
-                                return response.json();
-                            }})
-                            .then(data => {{
-                                // Stop loading state
-                                loading.dispatch(Loading.Action.STOP);
-
-                                if (!data.success) {{
-                                    throw new Error(data.error || 'Failed to get recommendations');
-                                }}
-
-                                // Display recommendations
-                                const recommendationsList = document.getElementById('recommendationsList');
-                                recommendationsList.innerHTML = '';
-                                recommendationsList.classList.remove('hidden');
-
-                                data.recommendations.forEach(rec => {{
-                                    const product = rec.product;
-                                    const card = `
-                                        <div class="bg-white rounded-lg shadow-md p-6 mb-4">
-                                            ${{product.image_url ? `<img src="${{product.image_url}}" alt="${{product.title}}" class="w-full h-48 object-cover mb-4 rounded">` : ''}}
-                                            <h3 class="text-lg font-semibold mb-2">${{product.title}}</h3>
-                                            <p class="text-gray-600 mb-2">£${{product.price.toFixed(2)}}</p>
-                                            <div class="mb-4">
-                                                <div class="text-sm text-gray-500">Confidence Score: ${{(rec.confidence_score * 100).toFixed(1)}}%</div>
-                                                <div class="text-sm text-gray-700 mt-2">${{rec.explanation}}</div>
-                                            </div>
-                                            <a href="${{product.url}}" target="_blank" class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">View Product</a>
-                                        </div>
-                                    `;
-                                    recommendationsList.innerHTML += card;
-                                }});
-                            }})
-                            .catch(error => {{
-                                // Stop loading state
-                                loading.dispatch(Loading.Action.STOP);
-
-                                console.error('Error:', error);
-                                if (!error.message.includes('Session expired')) {{
-                                    const modal = Modal.create(app, {{
-                                        title: 'Error',
-                                        message: `Error getting recommendations: ${{error.message}}`,
-                                        primaryAction: {{
-                                            content: 'OK',
-                                            onAction: () => modal.dispatch(Modal.Action.CLOSE),
-                                        }},
-                                    }});
-                                    modal.dispatch(Modal.Action.OPEN);
-                                }}
+                    <script type="text/javascript">
+                        document.addEventListener('DOMContentLoaded', function() {{
+                            var AppBridge = window['app-bridge'];
+                            var createApp = AppBridge.default;
+                            var actions = AppBridge.actions;
+                            
+                            // Initialize app
+                            const app = createApp({{
+                                apiKey: '{SHOPIFY_API_KEY}',
+                                host: window.location.search.substring(1).split('=')[1],
+                                forceRedirect: true
                             }});
-                        }}
+
+                            // Set up app-bridge actions
+                            var TitleBar = actions.TitleBar;
+                            var Button = actions.Button;
+                            var Loading = actions.Loading;
+                            var Modal = actions.Modal;
+                            var Redirect = actions.Redirect;
+                            var Toast = actions.Toast;
+
+                            // Create title bar
+                            var titleBarOptions = {{
+                                title: 'Smart Product Advisor',
+                            }};
+                            var titleBar = TitleBar.create(app, titleBarOptions);
+
+                            // Handle session expiry
+                            function handleSessionExpiry(response) {{
+                                if (response.status === 401 || response.status === 403) {{
+                                    const redirect = Redirect.create(app);
+                                    redirect.dispatch(Redirect.Action.REMOTE, '/install?shop={shop}');
+                                    return true;
+                                }}
+                                return false;
+                            }}
+
+                            // Function to get recommendations
+                            window.getRecommendations = function() {{
+                                const priceRange = document.getElementById('priceRange').value;
+                                const category = document.getElementById('category').value;
+                                const preferences = document.getElementById('preferences').value;
+
+                                // Show loading state
+                                const loading = Loading.create(app);
+                                loading.dispatch(Loading.Action.START);
+
+                                // Hide previous recommendations
+                                document.getElementById('recommendationsList').classList.add('hidden');
+
+                                // Make API call
+                                fetch('{APP_URL}/api/recommendations', {{
+                                    method: 'POST',
+                                    headers: {{
+                                        'Content-Type': 'application/json',
+                                        'X-Shop-Domain': '{shop}'
+                                    }},
+                                    credentials: 'include',
+                                    body: JSON.stringify({{
+                                        preferences: {{
+                                            price_range: priceRange,
+                                            category: category,
+                                            keywords: preferences.split(',').map(k => k.trim())
+                                        }}
+                                    }})
+                                }})
+                                .then(response => {{
+                                    if (handleSessionExpiry(response)) {{
+                                        throw new Error('Session expired');
+                                    }}
+                                    return response.json();
+                                }})
+                                .then(data => {{
+                                    loading.dispatch(Loading.Action.STOP);
+
+                                    if (!data.success) {{
+                                        throw new Error(data.error || 'Failed to get recommendations');
+                                    }}
+
+                                    const recommendationsList = document.getElementById('recommendationsList');
+                                    recommendationsList.innerHTML = '';
+                                    recommendationsList.classList.remove('hidden');
+
+                                    data.recommendations.forEach(rec => {{
+                                        const product = rec.product;
+                                        const card = `
+                                            <div class="bg-white rounded-lg shadow-md p-6 mb-4">
+                                                ${{product.image_url ? `<img src="${{product.image_url}}" alt="${{product.title}}" class="w-full h-48 object-cover mb-4 rounded">` : ''}}
+                                                <h3 class="text-lg font-semibold mb-2">${{product.title}}</h3>
+                                                <p class="text-gray-600 mb-2">£${{product.price.toFixed(2)}}</p>
+                                                <div class="mb-4">
+                                                    <div class="text-sm text-gray-500">Confidence Score: ${{(rec.confidence_score * 100).toFixed(1)}}%</div>
+                                                    <div class="text-sm text-gray-700 mt-2">${{rec.explanation}}</div>
+                                                </div>
+                                                <a href="${{product.url}}" target="_blank" class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">View Product</a>
+                                            </div>
+                                        `;
+                                        recommendationsList.innerHTML += card;
+                                    }});
+                                }})
+                                .catch(error => {{
+                                    loading.dispatch(Loading.Action.STOP);
+                                    console.error('Error:', error);
+                                    
+                                    const toast = Toast.create(app, {{
+                                        message: `Error: ${{error.message}}`,
+                                        duration: 5000,
+                                        isError: true
+                                    }});
+                                    toast.dispatch(Toast.Action.SHOW);
+                                }});
+                            }};
+                        }});
                     </script>
                 </head>
-                <body class="bg-gray-100">
-                    <div class="container mx-auto px-4 py-8">
-                        <h1 class="text-3xl font-bold mb-8 text-gray-800">Smart Product Advisor</h1>
-                        
-                        <div class="bg-white rounded-lg shadow-md p-6 mb-8">
+                <body class="bg-gray-100 p-6">
+                    <div class="max-w-4xl mx-auto">
+                        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
                             <h2 class="text-xl font-semibold mb-4">Get Product Recommendations</h2>
-                            
                             <div class="space-y-4">
                                 <div>
-                                    <label class="block text-gray-700 mb-2">Price Range</label>
-                                    <select id="priceRange" class="w-full p-2 border rounded">
-                                        <option value="0-50">Under £50</option>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">Price Range</label>
+                                    <select id="priceRange" class="w-full border border-gray-300 rounded-md px-3 py-2">
+                                        <option value="any">Any Price</option>
+                                        <option value="0-50">£0 - £50</option>
                                         <option value="50-100">£50 - £100</option>
                                         <option value="100-200">£100 - £200</option>
-                                        <option value="200-500">£200 - £500</option>
-                                        <option value="500+">£500+</option>
+                                        <option value="200+">£200+</option>
                                     </select>
                                 </div>
-                                
                                 <div>
-                                    <label class="block text-gray-700 mb-2">Category</label>
-                                    <input type="text" id="category" class="w-full p-2 border rounded" placeholder="e.g., Blankets, Pouffe">
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">Category</label>
+                                    <select id="category" class="w-full border border-gray-300 rounded-md px-3 py-2">
+                                        <option value="any">Any Category</option>
+                                        <option value="clothing">Clothing</option>
+                                        <option value="accessories">Accessories</option>
+                                        <option value="electronics">Electronics</option>
+                                        <option value="home">Home & Living</option>
+                                    </select>
                                 </div>
-                                
                                 <div>
-                                    <label class="block text-gray-700 mb-2">Customer Preferences</label>
-                                    <textarea id="preferences" class="w-full p-2 border rounded" rows="3" placeholder="Describe what you're looking for (e.g., handmade, cotton, comfortable)"></textarea>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">Preferences (comma-separated)</label>
+                                    <input type="text" id="preferences" class="w-full border border-gray-300 rounded-md px-3 py-2" placeholder="e.g., casual, comfortable, modern">
                                 </div>
-                                
-                                <button onclick="getRecommendations()" class="bg-green-500 text-white px-6 py-2 rounded hover:bg-green-600">
+                                <button onclick="getRecommendations()" class="w-full bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">
                                     Get Recommendations
                                 </button>
                             </div>
                         </div>
-                        
-                        <div id="recommendationsLoading" class="hidden">
-                            <div class="flex items-center justify-center py-8">
-                                <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-green-500"></div>
-                            </div>
-                        </div>
-                        
-                        <div id="recommendationsList" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                            <!-- Recommendations will be inserted here -->
-                        </div>
+                        <div id="recommendationsList" class="space-y-4 hidden"></div>
                     </div>
-
-                    <script>
-                        function getRecommendations() {{
-                            const priceRange = document.getElementById('priceRange').value;
-                            const category = document.getElementById('category').value;
-                            const preferences = document.getElementById('preferences').value;
-
-                            // Show loading state
-                            document.getElementById('recommendationsLoading').classList.remove('hidden');
-                            document.getElementById('recommendationsList').classList.add('hidden');
-
-                            // Make API call to get recommendations
-                            fetch('{APP_URL}/api/recommendations', {{
-                                method: 'POST',
-                                headers: {{
-                                    'Content-Type': 'application/json',
-                                    'X-Shop-Domain': '{shop}'
-                                }},
-                                credentials: 'include',
-                                body: JSON.stringify({{
-                                    preferences: {{
-                                        price_range: priceRange,
-                                        category: category,
-                                        keywords: preferences.split(',').map(k => k.trim())
-                                    }}
-                                }})
-                            }})
-                            .then(response => {{
-                                if (!response.ok) {{
-                                    return response.json().then(data => {{
-                                        if (data.redirect_url) {{
-                                            // Handle authentication redirect
-                                            window.location.href = data.redirect_url;
-                                            throw new Error('Redirecting for authentication...');
-                                        }}
-                                        throw new Error(data.error || `HTTP error! status: ${{response.status}}`);
-                                    }});
-                                }}
-                                return response.json();
-                            }})
-                            .then(data => {{
-                                // Hide loading state
-                                document.getElementById('recommendationsLoading').classList.add('hidden');
-                                document.getElementById('recommendationsList').classList.remove('hidden');
-
-                                if (!data.success) {{
-                                    throw new Error(data.error || 'Failed to get recommendations');
-                                }}
-
-                                // Display recommendations
-                                const recommendationsList = document.getElementById('recommendationsList');
-                                recommendationsList.innerHTML = '';
-
-                                data.recommendations.forEach(rec => {{
-                                    const product = rec.product;
-                                    const card = `
-                                        <div class="bg-white rounded-lg shadow-md p-6 mb-4">
-                                            ${{product.image_url ? `<img src="${{product.image_url}}" alt="${{product.title}}" class="w-full h-48 object-cover mb-4 rounded">` : ''}}
-                                            <h3 class="text-lg font-semibold mb-2">${{product.title}}</h3>
-                                            <p class="text-gray-600 mb-2">£${{product.price.toFixed(2)}}</p>
-                                            <div class="mb-4">
-                                                <div class="text-sm text-gray-500">Confidence Score: ${(rec.confidence_score * 100).toFixed(1)}%</div>
-                                                <div class="text-sm text-gray-700 mt-2">${{rec.explanation}}</div>
-                                            </div>
-                                            <a href="${{product.url}}" target="_blank" class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">View Product</a>
-                                        </div>
-                                    `;
-                                    recommendationsList.innerHTML += card;
-                                }});
-                            }})
-                            .catch(error => {{
-                                console.error('Error:', error);
-                                document.getElementById('recommendationsLoading').classList.add('hidden');
-                                if (!error.message.includes('Redirecting')) {{
-                                    alert('Error getting recommendations: ' + error.message);
-                                }}
-                            }});
-                        }}
-                    </script>
                 </body>
             </html>
-            """)
+            """
             
-            # Set cookie headers for embedded app
-            response.headers['Cache-Control'] = 'no-store'
-            cookie = f'sp_session={session.sid}; Path=/; HttpOnly; Secure; SameSite=None'
-            response.headers['Set-Cookie'] = cookie
+            response = make_response(html_content)
+            response.headers['Content-Type'] = 'text/html'
             
-            # Add security headers
-            response.headers['X-Frame-Options'] = 'ALLOWALL'
-            response.headers['Content-Security-Policy'] = "frame-ancestors 'self' https://*.myshopify.com https://admin.shopify.com;"
+            # Set cookie
+            response.set_cookie(
+                'sp_session',
+                session.sid,
+                secure=True,
+                httponly=True,
+                samesite='None',
+                path='/'
+            )
             
             return response
             
