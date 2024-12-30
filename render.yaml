@@ -4,7 +4,7 @@ services:
     runtime: python
     region: ohio
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app
+    startCommand: gunicorn app:app --workers 4 --worker-class gthread --threads 2 --timeout 120 --access-logfile '-' --error-logfile '-'
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
@@ -12,12 +12,18 @@ services:
         value: app.py
       - key: FLASK_ENV
         value: production
-      - key: REDIS_URL
-        fromService:
-          type: redis
-          name: smart-advisor-redis
-          property: connectionString
+      - key: WEB_CONCURRENCY
+        value: 4
+      - key: GUNICORN_CMD_ARGS
+        value: "--timeout 120 --keep-alive 5 --log-level debug"
+    healthCheckPath: /health
     autoDeploy: true
+    plan: starter
+    scaling:
+      minInstances: 1
+      maxInstances: 1
+      targetMemoryPercent: 80
+      targetCPUPercent: 80
 
   - type: redis
     name: smart-advisor-redis

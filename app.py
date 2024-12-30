@@ -752,13 +752,29 @@ def debug():
 def health_check():
     """Health check endpoint"""
     try:
+        # Check if we can access environment variables
+        if not SHOPIFY_API_KEY or not SHOPIFY_API_SECRET:
+            raise ValueError("Missing required environment variables")
+
+        # Check if we can create a session
+        shopify.Session.setup(api_key=SHOPIFY_API_KEY, secret=SHOPIFY_API_SECRET)
+        
+        # Check if we can access the database (if needed)
+        # Add any other critical checks here
+        
         return jsonify({
             'status': 'healthy',
-            'timestamp': datetime.datetime.utcnow().isoformat()
-        })
+            'timestamp': datetime.datetime.utcnow().isoformat(),
+            'app_url': APP_URL,
+            'api_version': API_VERSION
+        }), 200
     except Exception as e:
         logger.error(f"Health check failed: {str(e)}")
-        return jsonify({'status': 'unhealthy', 'error': str(e)}), 500
+        return jsonify({
+            'status': 'unhealthy',
+            'error': str(e),
+            'timestamp': datetime.datetime.utcnow().isoformat()
+        }), 500
 
 # Error handlers
 @app.errorhandler(404)
