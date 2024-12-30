@@ -1,73 +1,86 @@
 import requests
 import json
 import logging
+import shopify
+import os
 
 # Configure logging
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Configuration
+SHOP_DOMAIN = "smart-advisor-test.myshopify.com"
+APP_URL = "https://smart-product-advisor.onrender.com"
+API_VERSION = "2023-07"
+
+# Shopify API credentials
+SHOPIFY_API_KEY = os.environ.get('SHOPIFY_API_KEY')
+SHOPIFY_API_SECRET = os.environ.get('SHOPIFY_API_SECRET')
+
 def test_recommendations():
-    # API endpoint
-    url = "https://smart-product-advisor.onrender.com/api/mistral/recommend"
+    """Test the recommendation API endpoint"""
+    url = f"{APP_URL}/api/recommendations"
     
     # Test data
     test_data = {
         "preferences": {
-            "price_range": "50-100",
-            "category": "Poufs",
-            "keywords": ["handmade", "velvet", "moroccan"]
+            "price_range": "0-500",  # Wider range to ensure we get results
+            "category": "",  # Empty to get all categories
+            "keywords": ["modern", "stylish"]  # Simple keywords
         }
     }
     
     # Headers
     headers = {
         "Content-Type": "application/json",
-        "X-Shop-Domain": "smart-advisor-test.myshopify.com",
-        "Origin": "https://smart-advisor-test.myshopify.com"
+        "X-Shop-Domain": SHOP_DOMAIN,
+        "Origin": f"https://{SHOP_DOMAIN}",
+        "Accept": "application/json"
     }
     
     try:
-        # Log request details
-        logger.debug(f"Sending request to: {url}")
-        logger.debug(f"Headers: {json.dumps(headers, indent=2)}")
-        logger.debug(f"Data: {json.dumps(test_data, indent=2)}")
+        # Initialize Shopify API
+        shopify.Session.setup(api_key=SHOPIFY_API_KEY, secret=SHOPIFY_API_SECRET)
+        session = shopify.Session(SHOP_DOMAIN, API_VERSION)
         
-        # Make the request
-        print("\nSending request to recommendation API...")
-        response = requests.post(url, json=test_data, headers=headers)
+        logger.info("Making request to recommendation API...")
+        logger.info(f"Request URL: {url}")
+        logger.info(f"Request data: {json.dumps(test_data, indent=2)}")
         
-        # Check response status
-        print(f"Response status code: {response.status_code}")
-        print(f"Response headers: {dict(response.headers)}")
+        # Make request with session
+        response = requests.post(
+            url, 
+            json=test_data, 
+            headers=headers,
+            cookies={"session": "true"},
+            allow_redirects=True
+        )
+        
+        logger.info(f"Response status code: {response.status_code}")
+        logger.info(f"Response headers: {dict(response.headers)}")
         
         if response.status_code == 200:
             result = response.json()
-            if result.get('success'):
-                recommendations = result['recommendations']
-                print("\nRecommendations received:")
-                for i, rec in enumerate(recommendations, 1):
-                    print(f"\nRecommendation {i}:")
-                    print(f"Product: {rec['product']['title']}")
-                    print(f"Price: £{rec['product']['price']}")
-                    print(f"Confidence: {rec['confidence_score']*100:.1f}%")
-                    print(f"Explanation: {rec['explanation']}")
-                    print(f"URL: {rec['product']['url']}")
-            else:
-                print("\nAPI request successful but no recommendations returned")
-                print(f"Response content: {response.text}")
+            logger.info("Recommendations received successfully:")
+            logger.info(json.dumps(result, indent=2))
+            return result
         else:
-            print(f"\nError response status: {response.status_code}")
-            print(f"Error response headers: {dict(response.headers)}")
-            print(f"Error response content: {response.text}")
+            logger.error(f"Error response: {response.text}")
+            # Try to parse error response
+            try:
+                error_data = response.json()
+                logger.error(f"Detailed error: {json.dumps(error_data, indent=2)}")
+            except:
+                logger.error("Could not parse error response as JSON")
+            return None
             
-    except requests.exceptions.RequestException as e:
-        print(f"\nNetwork error: {str(e)}")
-        if hasattr(e, 'response'):
-            print(f"Error response content: {e.response.text}")
     except Exception as e:
-        print(f"\nUnexpected error: {str(e)}")
-        import traceback
-        print(traceback.format_exc())
+        logger.error(f"Error making request: {str(e)}")
+        logger.error("Full error:", exc_info=True)
+        return None
 
 if __name__ == "__main__":
+    if not SHOPIFY_API_KEY or not SHOPIFY_API_SECRET:
+        logger.error("Missing Shopify API credentials. Please set SHOPIFY_API_KEY and SHOPIFY_API_SECRET environment variables.")
+        exit(1)
     test_recommendations() 

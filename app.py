@@ -276,6 +276,7 @@ def get_recommendations():
         logger.info("=== New Recommendation Request ===")
         logger.info(f"Headers: {dict(request.headers)}")
         logger.info(f"Request data: {request.get_data(as_text=True)}")
+        logger.info(f"Session data: {dict(session)}")
         
         # Validate request
         if not request.is_json:
@@ -309,19 +310,34 @@ def get_recommendations():
             logger.info("Setting up Shopify session...")
             shopify.Session.setup(api_key=SHOPIFY_API_KEY, secret=SHOPIFY_API_SECRET)
             shopify_session = shopify.Session(shop_domain, API_VERSION)
-            access_token = session.get('access_token')
             
+            # Try to get access token from session
+            access_token = session.get('access_token')
             if not access_token:
-                logger.error("No access token in session")
+                logger.warning("No access token in session, redirecting to install")
+                install_url = f"{APP_URL}/install?shop={shop_domain}"
                 return jsonify({
                     'success': False,
-                    'error': 'Authentication required'
+                    'error': 'Authentication required',
+                    'redirect_url': install_url
                 }), 401
-                
-            logger.info(f"Access token from session: {access_token}")
             
+            logger.info("Using access token from session")
             shopify_session.token = access_token
             shopify.ShopifyResource.activate_session(shopify_session)
+            
+            # Verify session is valid
+            try:
+                shop = shopify.Shop.current()
+                logger.info(f"Successfully verified shop access: {shop.name}")
+            except Exception as e:
+                logger.error(f"Invalid session, redirecting to install: {str(e)}")
+                install_url = f"{APP_URL}/install?shop={shop_domain}"
+                return jsonify({
+                    'success': False,
+                    'error': 'Invalid session',
+                    'redirect_url': install_url
+                }), 401
             
             logger.info("Fetching products...")
             products = shopify.Product.find(limit=20)
@@ -646,7 +662,7 @@ def app_page():
                                 method: 'POST',
                                 headers: {{
                                     'Content-Type': 'application/json',
-                                    'X-Shop-Domain': '{shop}'
+                                    'X-Shop-Domain': '{shop_domain}'
                                 }},
                                 credentials: 'include',
                                 body: JSON.stringify({{
@@ -659,7 +675,14 @@ def app_page():
                             }})
                             .then(response => {{
                                 if (!response.ok) {{
-                                    throw new Error(`HTTP error! status: ${{response.status}}`);
+                                    return response.json().then(data => {{
+                                        if (data.redirect_url) {{
+                                            // Handle authentication redirect
+                                            window.location.href = data.redirect_url;
+                                            throw new Error('Redirecting for authentication...');
+                                        }}
+                                        throw new Error(data.error || `HTTP error! status: ${{response.status}}`);
+                                    }});
                                 }}
                                 return response.json();
                             }})
@@ -684,7 +707,7 @@ def app_page():
                                             <h3 class="text-lg font-semibold mb-2">${{product.title}}</h3>
                                             <p class="text-gray-600 mb-2">£${{product.price.toFixed(2)}}</p>
                                             <div class="mb-4">
-                                                <div class="text-sm text-gray-500">Confidence Score: ${{(rec.confidence_score * 100).toFixed(1)}}%</div>
+                                                <div class="text-sm text-gray-500">Confidence Score: ${(rec.confidence_score * 100).toFixed(1)}%</div>
                                                 <div class="text-sm text-gray-700 mt-2">${{rec.explanation}}</div>
                                             </div>
                                             <a href="${{product.url}}" target="_blank" class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">View Product</a>
@@ -696,7 +719,9 @@ def app_page():
                             .catch(error => {{
                                 console.error('Error:', error);
                                 document.getElementById('recommendationsLoading').classList.add('hidden');
-                                alert('Error getting recommendations: ' + error.message);
+                                if (!error.message.includes('Redirecting')) {{
+                                    alert('Error getting recommendations: ' + error.message);
+                                }}
                             }});
                         }}
                     </script>
