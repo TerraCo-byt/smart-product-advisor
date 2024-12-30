@@ -117,6 +117,10 @@ def verify_hmac(params):
 def generate_product_recommendations(products, preferences):
     """Generate AI-powered product recommendations using Hugging Face Inference API"""
     try:
+        logger.info("Starting recommendation generation...")
+        logger.info(f"Number of products to analyze: {len(products)}")
+        logger.info(f"User preferences: {preferences}")
+
         # Prepare product context
         product_context = "\n".join([
             f"Product {i+1}:"
@@ -135,18 +139,21 @@ def generate_product_recommendations(products, preferences):
             f"Keywords: {', '.join(preferences.get('keywords', []))}"
         )
 
+        logger.info("Prepared context and preferences")
+
         # Construct the prompt
-        system_prompt = """You are a smart product recommendation system. Analyze the available products and user preferences to provide personalized recommendations. For each recommended product:
-1. Evaluate how well it matches the user's preferences
-2. Calculate a confidence score (0-1)
-3. Provide a detailed explanation of why this product is recommended
-4. Consider price range, category, and specific features
-Format your response as JSON with the following structure for each recommendation:
-{
-    "product_index": 1,
-    "confidence_score": 0.95,
-    "explanation": "Detailed reason for recommendation"
-}"""
+        system_prompt = """You are a smart product recommendation system. Based on the available products and user preferences, recommend the most suitable products. For each recommendation:
+1. Check if the product matches the price range and category
+2. Evaluate how well it matches the user's keywords and preferences
+3. Provide a clear explanation of why this product is recommended
+4. Give a confidence score between 0 and 1
+
+Return your response as a JSON array with this structure:
+[{
+    "product_index": (number starting from 1),
+    "confidence_score": (number between 0 and 1),
+    "explanation": "Clear explanation of why this product matches"
+}]"""
 
         user_prompt = f"""Available Products:
 {product_context}
@@ -154,7 +161,9 @@ Format your response as JSON with the following structure for each recommendatio
 User Preferences:
 {user_prefs}
 
-Provide recommendations for the most suitable products. Return only the JSON array of recommendations."""
+Provide the best product recommendations as a JSON array."""
+
+        logger.info("Constructed prompts")
 
         # Prepare the payload for Hugging Face
         payload = {
@@ -172,45 +181,70 @@ Provide recommendations for the most suitable products. Return only the JSON arr
             "Content-Type": "application/json"
         }
 
+        logger.info("Making request to Hugging Face API...")
         response = requests.post(
             HUGGINGFACE_API_URL,
             headers=headers,
-            json=payload
+            json=payload,
+            timeout=30  # Add timeout
         )
+
+        logger.info(f"Hugging Face API response status: {response.status_code}")
+        logger.info(f"Hugging Face API response: {response.text[:500]}...")  # Log first 500 chars
 
         if response.status_code != 200:
             logger.error(f"Hugging Face API error: {response.text}")
-            raise Exception("Failed to get recommendations from Hugging Face")
+            raise Exception(f"Failed to get recommendations from Hugging Face: {response.text}")
 
         # Parse response
-        recommendations_text = response.json()[0]["generated_text"]
-        
+        response_data = response.json()
+        if not response_data or not isinstance(response_data, list) or not response_data[0].get("generated_text"):
+            logger.error(f"Invalid response format from Hugging Face: {response_data}")
+            raise Exception("Invalid response format from Hugging Face")
+
+        recommendations_text = response_data[0]["generated_text"]
+        logger.info(f"Raw recommendations text: {recommendations_text[:500]}...")
+
         # Extract JSON array from response
         json_str = recommendations_text.strip()
         if "```json" in json_str:
             json_str = json_str.split("```json")[1].split("```")[0]
-        
-        recommendations_data = json.loads(json_str)
-        
+        elif "```" in json_str:
+            json_str = json_str.split("```")[1]
+
+        logger.info(f"Extracted JSON string: {json_str}")
+
+        try:
+            recommendations_data = json.loads(json_str)
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse recommendations JSON: {e}")
+            logger.error(f"JSON string was: {json_str}")
+            raise Exception("Failed to parse recommendations response")
+
+        logger.info(f"Parsed recommendations data: {recommendations_data}")
+
         # Format recommendations
         formatted_recommendations = []
         for rec in recommendations_data:
             product_idx = rec['product_index'] - 1
             if 0 <= product_idx < len(products):
                 product = products[product_idx]
-                formatted_recommendations.append({
+                formatted_rec = {
                     'product': {
                         'title': product.title,
                         'price': float(product.variants[0].price),
                         'image_url': product.images[0].src if product.images else None,
                         'url': f"https://{request.headers.get('X-Shop-Domain')}/products/{product.handle}"
                     },
-                    'confidence_score': rec['confidence_score'],
+                    'confidence_score': float(rec['confidence_score']),
                     'explanation': rec['explanation']
-                })
-        
+                }
+                formatted_recommendations.append(formatted_rec)
+                logger.info(f"Added recommendation for product: {product.title}")
+
+        logger.info(f"Final formatted recommendations count: {len(formatted_recommendations)}")
         return formatted_recommendations
-            
+
     except Exception as e:
         logger.error(f"Error generating recommendations: {str(e)}")
         logger.error(traceback.format_exc())
@@ -233,11 +267,29 @@ def get_recommendations():
         logger.info(f"Headers: {dict(request.headers)}")
         logger.info(f"Request data: {request.get_data(as_text=True)}")
         
+        # Validate request
+        if not request.is_json:
+            logger.error("Request must be JSON")
+            return jsonify({
+                'success': False,
+                'error': 'Request must be JSON'
+            }), 400
+        
         data = request.json
+        if not data:
+            logger.error("Empty request body")
+            return jsonify({
+                'success': False,
+                'error': 'Empty request body'
+            }), 400
+
         shop_domain = request.headers.get('X-Shop-Domain')
         if not shop_domain:
             logger.error("Missing shop domain header")
-            return jsonify({'error': 'Missing shop domain'}), 400
+            return jsonify({
+                'success': False,
+                'error': 'Missing shop domain header'
+            }), 400
 
         logger.info(f"Getting recommendations for shop: {shop_domain}")
 
@@ -247,12 +299,29 @@ def get_recommendations():
             logger.info("Setting up Shopify session...")
             shopify.Session.setup(api_key=SHOPIFY_API_KEY, secret=SHOPIFY_API_SECRET)
             shopify_session = shopify.Session(shop_domain, API_VERSION)
-            shopify_session.token = session.get('access_token')
-            logger.info(f"Access token from session: {session.get('access_token')}")
+            access_token = session.get('access_token')
             
+            if not access_token:
+                logger.error("No access token in session")
+                return jsonify({
+                    'success': False,
+                    'error': 'Authentication required'
+                }), 401
+                
+            logger.info(f"Access token from session: {access_token}")
+            
+            shopify_session.token = access_token
             shopify.ShopifyResource.activate_session(shopify_session)
+            
             logger.info("Fetching products...")
             products = shopify.Product.find(limit=20)
+            if not products:
+                logger.warning("No products found in shop")
+                return jsonify({
+                    'success': False,
+                    'error': 'No products found in shop'
+                }), 404
+                
             logger.info(f"Found {len(products)} products")
             
         except Exception as e:
@@ -265,17 +334,33 @@ def get_recommendations():
         
         # Extract user preferences
         preferences = data.get('preferences', {})
+        if not preferences:
+            logger.error("No preferences provided")
+            return jsonify({
+                'success': False,
+                'error': 'No preferences provided'
+            }), 400
+            
         logger.info(f"User preferences: {preferences}")
         
         # Get AI-powered recommendations
         try:
             logger.info("Generating recommendations...")
             recommendations = generate_product_recommendations(products, preferences)
+            if not recommendations:
+                logger.warning("No recommendations generated")
+                return jsonify({
+                    'success': False,
+                    'error': 'No suitable recommendations found'
+                }), 404
+                
             logger.info(f"Generated {len(recommendations)} recommendations")
             
             # Sort by confidence score
             recommendations.sort(key=lambda x: x['confidence_score'], reverse=True)
             recommendations = recommendations[:6]  # Limit to top 6 recommendations
+            
+            logger.info("Successfully processed recommendations")
             
         except Exception as e:
             logger.error(f"Error generating recommendations: {str(e)}")
