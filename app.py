@@ -2,7 +2,7 @@ import os
 import sys
 import logging
 import traceback
-from flask import Flask, request, jsonify, redirect, session, Response
+from flask import Flask, request, jsonify, redirect, session, Response, make_response
 from flask_cors import CORS
 import shopify
 from shopify import ApiVersion
@@ -31,14 +31,15 @@ app.secret_key = os.environ.get('FLASK_SECRET_KEY', os.urandom(32))
 app.config.update(
     SESSION_COOKIE_SECURE=True,
     SESSION_COOKIE_HTTPONLY=True,
-    SESSION_COOKIE_SAMESITE='None',
-    PERMANENT_SESSION_LIFETIME=3600
+    SESSION_COOKIE_SAMESITE='Lax',
+    PERMANENT_SESSION_LIFETIME=datetime.timedelta(days=1),
+    SESSION_COOKIE_NAME='sp_session',
 )
 
 # Allow all origins for CORS with proper configuration
 CORS(app, resources={
     r"/*": {
-        "origins": ["https://*.myshopify.com", "https://admin.shopify.com"],
+        "origins": ["https://*.myshopify.com", "https://admin.shopify.com", "https://partners.shopify.com"],
         "methods": ["GET", "POST", "OPTIONS"],
         "allow_headers": ["Content-Type", "X-Shop-Domain", "Authorization", "Origin"],
         "supports_credentials": True,
@@ -50,11 +51,15 @@ CORS(app, resources={
 def after_request(response):
     """Ensure proper headers for session cookies and CORS"""
     origin = request.headers.get('Origin', '')
-    if origin and ('.myshopify.com' in origin or 'admin.shopify.com' in origin):
+    if origin and ('.myshopify.com' in origin or 'admin.shopify.com' in origin or 'partners.shopify.com' in origin):
         response.headers['Access-Control-Allow-Origin'] = origin
         response.headers['Access-Control-Allow-Credentials'] = 'true'
         response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
         response.headers['Access-Control-Allow-Headers'] = 'Content-Type, X-Shop-Domain, Authorization, Origin'
+        
+        # Ensure cookies are set correctly
+        if 'Set-Cookie' in response.headers:
+            response.headers['Set-Cookie'] = response.headers['Set-Cookie'].replace('SameSite=None', 'SameSite=Lax')
     return response
 
 # Configuration
@@ -263,7 +268,7 @@ def get_recommendations():
         # Handle preflight request
         response = Response()
         origin = request.headers.get('Origin', '')
-        if origin and ('.myshopify.com' in origin or 'admin.shopify.com' in origin):
+        if origin and ('.myshopify.com' in origin or 'admin.shopify.com' in origin or 'partners.shopify.com' in origin):
             response.headers['Access-Control-Allow-Origin'] = origin
             response.headers['Access-Control-Allow-Methods'] = 'POST, OPTIONS'
             response.headers['Access-Control-Allow-Headers'] = 'Content-Type, X-Shop-Domain, Authorization, Origin'
@@ -403,7 +408,7 @@ def get_recommendations():
         
         # Set CORS headers for the response
         origin = request.headers.get('Origin', '')
-        if origin and ('.myshopify.com' in origin or 'admin.shopify.com' in origin):
+        if origin and ('.myshopify.com' in origin or 'admin.shopify.com' in origin or 'partners.shopify.com' in origin):
             response.headers['Access-Control-Allow-Origin'] = origin
             response.headers['Access-Control-Allow-Credentials'] = 'true'
         
@@ -580,7 +585,7 @@ def app_page():
             logger.info(f"Loading app page for shop: {shop_data.name}")
             
             # Return the app HTML
-            return f"""
+            response = make_response(f"""
             <!DOCTYPE html>
             <html>
                 <head>
@@ -659,7 +664,7 @@ def app_page():
                                 method: 'POST',
                                 headers: {{
                                     'Content-Type': 'application/json',
-                                    'X-Shop-Domain': '{shop_domain}'
+                                    'X-Shop-Domain': '{shop}'
                                 }},
                                 credentials: 'include',
                                 body: JSON.stringify({{
@@ -724,7 +729,14 @@ def app_page():
                     </script>
                 </body>
             </html>
-            """
+            """)
+            
+            # Set cookie headers
+            response.headers['Cache-Control'] = 'no-store'
+            response.headers['Set-Cookie'] = f'sp_session={session.sid}; Path=/; HttpOnly; Secure; SameSite=Lax'
+            
+            return response
+            
         except Exception as e:
             logger.error(f"Failed to verify shop access: {str(e)}")
             return redirect(f"/install?shop={shop}")
