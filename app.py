@@ -13,6 +13,7 @@ import json
 from urllib.parse import urlencode, quote
 import re
 import requests
+import datetime
 
 # Configure logging
 logging.basicConfig(
@@ -595,22 +596,22 @@ def app_page():
                                 <div>
                                     <label class="block text-gray-700 mb-2">Price Range</label>
                                     <select id="priceRange" class="w-full p-2 border rounded">
-                                        <option value="0-50">Under $50</option>
-                                        <option value="50-100">$50 - $100</option>
-                                        <option value="100-200">$100 - $200</option>
-                                        <option value="200-500">$200 - $500</option>
-                                        <option value="500+">$500+</option>
+                                        <option value="0-50">Under £50</option>
+                                        <option value="50-100">£50 - £100</option>
+                                        <option value="100-200">£100 - £200</option>
+                                        <option value="200-500">£200 - £500</option>
+                                        <option value="500+">£500+</option>
                                     </select>
                                 </div>
                                 
                                 <div>
                                     <label class="block text-gray-700 mb-2">Category</label>
-                                    <input type="text" id="category" class="w-full p-2 border rounded" placeholder="e.g., Electronics, Clothing">
+                                    <input type="text" id="category" class="w-full p-2 border rounded" placeholder="e.g., Blankets, Pouffe">
                                 </div>
                                 
                                 <div>
                                     <label class="block text-gray-700 mb-2">Customer Preferences</label>
-                                    <textarea id="preferences" class="w-full p-2 border rounded" rows="3" placeholder="Describe what you're looking for (e.g., durable, waterproof, comfortable)"></textarea>
+                                    <textarea id="preferences" class="w-full p-2 border rounded" rows="3" placeholder="Describe what you're looking for (e.g., handmade, cotton, comfortable)"></textarea>
                                 </div>
                                 
                                 <button onclick="getRecommendations()" class="bg-green-500 text-white px-6 py-2 rounded hover:bg-green-600">
@@ -641,12 +642,13 @@ def app_page():
                             document.getElementById('recommendationsList').classList.add('hidden');
 
                             // Make API call to get recommendations
-                            fetch('/api/recommendations', {{
+                            fetch('{APP_URL}/api/recommendations', {{
                                 method: 'POST',
                                 headers: {{
                                     'Content-Type': 'application/json',
                                     'X-Shop-Domain': '{shop}'
                                 }},
+                                credentials: 'include',
                                 body: JSON.stringify({{
                                     preferences: {{
                                         price_range: priceRange,
@@ -655,7 +657,12 @@ def app_page():
                                     }}
                                 }})
                             }})
-                            .then(response => response.json())
+                            .then(response => {{
+                                if (!response.ok) {{
+                                    throw new Error(`HTTP error! status: ${{response.status}}`);
+                                }}
+                                return response.json();
+                            }})
                             .then(data => {{
                                 // Hide loading state
                                 document.getElementById('recommendationsLoading').classList.add('hidden');
@@ -741,6 +748,18 @@ def debug():
         logger.error(f"Debug route error: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
+@app.route('/health')
+def health_check():
+    """Health check endpoint"""
+    try:
+        return jsonify({
+            'status': 'healthy',
+            'timestamp': datetime.datetime.utcnow().isoformat()
+        })
+    except Exception as e:
+        logger.error(f"Health check failed: {str(e)}")
+        return jsonify({'status': 'unhealthy', 'error': str(e)}), 500
+
 # Error handlers
 @app.errorhandler(404)
 def not_found_error(error):
@@ -755,4 +774,4 @@ def internal_error(error):
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8000))
     logger.info(f"Starting server on port {port}")
-    app.run(host='0.0.0.0', port=port) 
+    app.run(host='0.0.0.0', port=port, threaded=True) 
