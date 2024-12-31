@@ -16,6 +16,10 @@ import re
 import requests
 import datetime
 from flask_session import Session
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Configure logging
 logging.basicConfig(
@@ -482,170 +486,30 @@ def get_recommendations():
         except Exception as e:
             logger.error(f"Error clearing session: {str(e)}")
 
-@app.route('/auth/callback')
-def callback():
-    """Handle OAuth callback from Shopify"""
-    try:
-        shop = request.args.get('shop')
-        if not shop:
-            logger.error("Missing shop parameter in callback")
-            return jsonify({"error": "Missing shop parameter"}), 400
-            
-        logger.info(f"Callback received for shop: {shop}")
-        logger.info(f"Callback headers: {dict(request.headers)}")
-        logger.info(f"Callback args: {dict(request.args)}")
-            
-        # Verify state
-        state = request.args.get('state')
-        stored_state = session.get('state')
-        if not state or not stored_state or state != stored_state:
-            logger.warning(f"State mismatch or missing. Received: {state}, Stored: {stored_state}")
-            # Continue anyway since we have the shop parameter
-            logger.info("Proceeding with authentication despite state mismatch")
-            
-        # Get the working API version from session or use default
-        api_version = session.get('api_version', API_VERSION)
-        logger.info(f"Using API version for callback: {api_version}")
+def verify_request(request):
+    """Verify if the request is authenticated and has necessary parameters"""
+    shop = request.args.get('shop')
+    if not shop:
+        return False, None, "Missing shop parameter"
         
-        # Setup Shopify session
-        shopify.Session.setup(api_key=SHOPIFY_API_KEY, secret=SHOPIFY_API_SECRET)
-        shopify_session = shopify.Session(shop, api_version)
+    # Check if we have a valid session
+    access_token = session.get('access_token')
+    if not access_token:
+        return False, shop, "No access token"
         
-        # Request access token
-        try:
-            access_token = shopify_session.request_token(request.args)
-            if not access_token:
-                logger.error("Could not get access token")
-                return redirect(f"/install?shop={shop}")
-                
-            logger.info("Successfully obtained access token")
-                
-            # Store token in session
-            session['access_token'] = access_token
-            session['shop'] = shop
-            session.permanent = True
-            
-            # Activate Shopify session
-            shopify_session.token = access_token
-            shopify.ShopifyResource.activate_session(shopify_session)
-            
-            try:
-                # Verify the token works by making a simple API call
-                shop_info = shopify.Shop.current()
-                logger.info(f"Successfully authenticated shop: {shop_info.name}")
-            except Exception as e:
-                logger.error(f"Failed to verify shop access: {str(e)}")
-                return redirect(f"/install?shop={shop}")
-            
-            # Create response with proper cookie handling
-            app_url = f"{APP_URL}/app?shop={shop}"
-            response = make_response(redirect(app_url))
-            response.set_cookie(
-                'sp_session',
-                session.sid,
-                secure=True,
-                httponly=True,
-                samesite='None',
-                path='/'
-            )
-            return response
-            
-        except Exception as e:
-            logger.error(f"Error requesting access token: {str(e)}")
-            return redirect(f"/install?shop={shop}")
-        
-    except Exception as e:
-        logger.error(f"Callback error: {str(e)}")
-        logger.error(traceback.format_exc())
-        return redirect(f"/install?shop={shop}")
-    finally:
-        shopify.ShopifyResource.clear_session()
-
-@app.route('/install')
-def install():
-    """Initial route for app installation"""
-    try:
-        shop = request.args.get('shop')
-        if not shop:
-            logger.error("Missing shop parameter")
-            return jsonify({"error": "Missing shop parameter"}), 400
-
-        logger.info(f"Installation requested for shop: {shop}")
-        logger.info(f"Request headers: {dict(request.headers)}")
-        logger.info(f"Request args: {dict(request.args)}")
-
-        # Clear any existing sessions
-        session.clear()
-        
-        # Generate a nonce for state validation
-        state = base64.b64encode(os.urandom(16)).decode('utf-8')
-        
-        # Store shop and state in session
-        session['shop'] = shop
-        session['state'] = state
-        session.permanent = True  # Make session persistent
-        
-        # Initialize shopify session
-        shopify.Session.setup(api_key=SHOPIFY_API_KEY, secret=SHOPIFY_API_SECRET)
-        
-        # Create permission URL
-        redirect_uri = f"{APP_URL}/auth/callback"
-        logger.info(f"Using redirect URI: {redirect_uri}")
-        
-        # Try each version until one works
-        for version in AVAILABLE_VERSIONS:
-            try:
-                shopify_session = shopify.Session(shop, version)
-                auth_url = shopify_session.create_permission_url(
-                    SCOPES,
-                    redirect_uri,
-                    state
-                )
-                logger.info(f"Successfully created auth URL with API version {version}: {auth_url}")
-                session['api_version'] = version  # Store working version
-                
-                # Create response with cookie
-                response = make_response(redirect(auth_url))
-                response.set_cookie(
-                    'sp_session',
-                    session.sid,
-                    secure=True,
-                    httponly=True,
-                    samesite='None',
-                    path='/'
-                )
-                return response
-                
-            except Exception as e:
-                logger.warning(f"Failed to use API version {version}: {str(e)}")
-                continue
-        
-        # If we get here, no versions worked
-        logger.error("No valid API version found")
-        return jsonify({"error": "Failed to create authorization URL"}), 500
-        
-    except Exception as e:
-        logger.error(f"Installation error: {str(e)}")
-        logger.error(traceback.format_exc())
-        return jsonify({"error": str(e)}), 500
+    return True, shop, None
 
 @app.route('/app')
 def app_page():
     """Main app page that loads in the Shopify Admin"""
     try:
-        shop = request.args.get('shop')
-        if not shop:
-            logger.error("Missing shop parameter in app page")
-            return jsonify({"error": "Missing shop parameter"}), 400
-
-        # Make session permanent
-        session.permanent = True
-        
-        # Verify shop has valid access token
-        access_token = session.get('access_token')
-        if not access_token:
-            logger.info(f"No access token found, redirecting to install: {shop}")
-            return redirect(f"/install?shop={shop}")
+        # Verify the request
+        is_valid, shop, error = verify_request(request)
+        if not is_valid:
+            if shop:
+                logger.info(f"App page - redirecting to install: {error}")
+                return redirect(f"/install?shop={shop}")
+            return jsonify({"error": error}), 400
 
         # Get the API version from session
         api_version = session.get('api_version', API_VERSION)
@@ -653,11 +517,11 @@ def app_page():
         # Setup Shopify session
         shopify.Session.setup(api_key=SHOPIFY_API_KEY, secret=SHOPIFY_API_SECRET)
         shopify_session = shopify.Session(shop, api_version)
-        shopify_session.token = access_token
-        shopify.ShopifyResource.activate_session(shopify_session)
-
+        shopify_session.token = session.get('access_token')
+        
         try:
             # Verify the token still works
+            shopify.ShopifyResource.activate_session(shopify_session)
             shop_data = shopify.Shop.current()
             logger.info(f"Loading app page for shop: {shop_data.name}")
             
@@ -717,7 +581,6 @@ def app_page():
                 secure=True,
                 httponly=True,
                 samesite='None',
-                domain='.onrender.com',
                 path='/'
             )
             
@@ -725,6 +588,7 @@ def app_page():
             
         except Exception as e:
             logger.error(f"Failed to verify shop access: {str(e)}")
+            session.clear()  # Clear invalid session
             return redirect(f"/install?shop={shop}")
             
     except Exception as e:
@@ -733,6 +597,70 @@ def app_page():
         return jsonify({"error": str(e)}), 500
     finally:
         shopify.ShopifyResource.clear_session()
+
+@app.route('/install')
+def install():
+    """Initial route for app installation"""
+    try:
+        shop = request.args.get('shop')
+        if not shop:
+            logger.error("Missing shop parameter")
+            return jsonify({"error": "Missing shop parameter"}), 400
+
+        logger.info(f"Installation requested for shop: {shop}")
+        
+        # Check if we already have a valid session
+        if session.get('access_token') and session.get('shop') == shop:
+            try:
+                # Verify the token still works
+                shopify.Session.setup(api_key=SHOPIFY_API_KEY, secret=SHOPIFY_API_SECRET)
+                shopify_session = shopify.Session(shop, API_VERSION)
+                shopify_session.token = session.get('access_token')
+                shopify.ShopifyResource.activate_session(shopify_session)
+                shop_data = shopify.Shop.current()
+                logger.info(f"Found valid session for shop: {shop_data.name}")
+                return redirect(f"/app?shop={shop}")
+            except:
+                logger.info("Invalid session, proceeding with new installation")
+                session.clear()
+        
+        # Generate a nonce for state validation
+        state = base64.b64encode(os.urandom(16)).decode('utf-8')
+        
+        # Store shop and state in session
+        session['shop'] = shop
+        session['state'] = state
+        session.permanent = True
+        
+        # Create permission URL
+        shopify.Session.setup(api_key=SHOPIFY_API_KEY, secret=SHOPIFY_API_SECRET)
+        shopify_session = shopify.Session(shop, API_VERSION)
+        redirect_uri = f"{APP_URL}/auth/callback"
+        
+        auth_url = shopify_session.create_permission_url(
+            SCOPES,
+            redirect_uri,
+            state
+        )
+        
+        logger.info(f"Redirecting to auth URL: {auth_url}")
+        
+        # Create response with cookie
+        response = make_response(redirect(auth_url))
+        response.set_cookie(
+            'sp_session',
+            session.sid,
+            secure=True,
+            httponly=True,
+            samesite='None',
+            path='/'
+        )
+        return response
+        
+    except Exception as e:
+        logger.error(f"Installation error: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({"error": str(e)}), 500
 
 @app.route('/')
 def home():
@@ -831,6 +759,72 @@ def catch_all(path):
         logger.info(f"Redirecting undefined path to install: {path}")
         return redirect(f"/install?shop={shop}")
     return jsonify({"error": "Not found"}), 404
+
+@app.route('/auth/callback')
+def callback():
+    """Handle OAuth callback from Shopify"""
+    try:
+        shop = request.args.get('shop')
+        if not shop:
+            logger.error("Missing shop parameter in callback")
+            return jsonify({"error": "Missing shop parameter"}), 400
+            
+        logger.info(f"Callback received for shop: {shop}")
+        
+        # Verify state
+        state = request.args.get('state')
+        stored_state = session.get('state')
+        if not state or not stored_state or state != stored_state:
+            logger.warning(f"State mismatch. Received: {state}, Stored: {stored_state}")
+            return redirect(f"/install?shop={shop}")
+            
+        # Setup Shopify session
+        shopify.Session.setup(api_key=SHOPIFY_API_KEY, secret=SHOPIFY_API_SECRET)
+        shopify_session = shopify.Session(shop, API_VERSION)
+        
+        try:
+            # Request access token
+            access_token = shopify_session.request_token(request.args)
+            if not access_token:
+                logger.error("Could not get access token")
+                return redirect(f"/install?shop={shop}")
+                
+            logger.info("Successfully obtained access token")
+                
+            # Store token in session
+            session['access_token'] = access_token
+            session['shop'] = shop
+            session.permanent = True
+            
+            # Verify the token works
+            shopify_session.token = access_token
+            shopify.ShopifyResource.activate_session(shopify_session)
+            shop_data = shopify.Shop.current()
+            logger.info(f"Successfully authenticated shop: {shop_data.name}")
+            
+            # Redirect to app with proper cookie
+            app_url = f"/app?shop={shop}"
+            response = make_response(redirect(app_url))
+            response.set_cookie(
+                'sp_session',
+                session.sid,
+                secure=True,
+                httponly=True,
+                samesite='None',
+                path='/'
+            )
+            return response
+            
+        except Exception as e:
+            logger.error(f"Error requesting access token: {str(e)}")
+            return redirect(f"/install?shop={shop}")
+            
+    except Exception as e:
+        logger.error(f"Callback error: {str(e)}")
+        logger.error(traceback.format_exc())
+        return redirect(f"/install?shop={shop}")
+    finally:
+        shopify.ShopifyResource.clear_session()
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8000))
