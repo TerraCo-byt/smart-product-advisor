@@ -2,7 +2,7 @@ import os
 import sys
 import logging
 import traceback
-from flask import Flask, request, jsonify, redirect, session, Response, make_response
+from flask import Flask, request, jsonify, redirect, session, Response, make_response, render_template_string
 from flask_cors import CORS
 from flask.sessions import SessionInterface
 import shopify
@@ -84,9 +84,16 @@ def after_request(response):
     if origin:
         response.headers['Access-Control-Allow-Origin'] = origin
         response.headers['Access-Control-Allow-Credentials'] = 'true'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, X-Shop-Domain, Authorization'
         
         # Set frame ancestors for embedded app
-        response.headers['Content-Security-Policy'] = f"frame-ancestors 'self' {origin} https://admin.shopify.com https://*.myshopify.com;"
+        response.headers['Content-Security-Policy'] = (
+            "frame-ancestors 'self' "
+            "https://*.myshopify.com "
+            "https://admin.shopify.com "
+            "https://*.shopify.com;"
+        )
         response.headers['X-Frame-Options'] = 'ALLOWALL'
         
         # Handle cookies
@@ -98,10 +105,14 @@ def after_request(response):
                     cookie += '; SameSite=None'
                 if 'Secure' not in cookie:
                     cookie += '; Secure'
+                if 'Domain=' not in cookie:
+                    # Allow cookie to be shared between app domain and Shopify admin
+                    cookie += f'; Domain=.onrender.com'
                 response.headers.add('Set-Cookie', cookie)
     
     # Add security headers
     response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['Referrer-Policy'] = 'no-referrer-when-downgrade'
     
     return response
 
@@ -650,193 +661,63 @@ def app_page():
             shop_data = shopify.Shop.current()
             logger.info(f"Loading app page for shop: {shop_data.name}")
             
-            # Return the app HTML
-            html_content = f"""
-            <!DOCTYPE html>
-            <html>
-                <head>
-                    <title>Smart Product Advisor</title>
-                    <meta charset="utf-8">
-                    <meta name="viewport" content="width=device-width, initial-scale=1">
-                    <script src="https://unpkg.com/@shopify/app-bridge@3"></script>
-                    <script src="https://unpkg.com/@shopify/app-bridge-utils@3"></script>
-                    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
-                    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
-                    <script type="text/javascript">
-                        // Wait for DOM and app-bridge to load
-                        window.addEventListener('load', function() {{
-                            if (!window.shopify) {{
-                                console.error('Error: No Shopify App Bridge object found');
-                                return;
-                            }}
+            # Create response with HTML content
+            response = make_response(render_template_string("""
+                <!DOCTYPE html>
+                <html>
+                    <head>
+                        <title>Smart Product Advisor</title>
+                        <meta charset="utf-8">
+                        <meta name="viewport" content="width=device-width, initial-scale=1">
+                        <script src="https://unpkg.com/@shopify/app-bridge@3"></script>
+                        <script src="https://unpkg.com/@shopify/app-bridge-utils@3"></script>
+                        <script>
+                            window.addEventListener('load', function() {
+                                console.log('Initializing app...');
+                                try {
+                                    const host = new URLSearchParams(window.location.search).get('host');
+                                    console.log('Host:', host);
+                                    
+                                    if (!window.shopify) {
+                                        console.error('Shopify App Bridge not loaded');
+                                        document.body.innerHTML = '<div style="color: red; padding: 2em;">Error: Could not initialize Shopify App Bridge. Please refresh the page.</div>';
+                                        return;
+                                    }
 
-                            try {{
-                                const host = new URLSearchParams(window.location.search).get('host');
-                                const config = {{
-                                    apiKey: '{SHOPIFY_API_KEY}',
-                                    host: host,
-                                    forceRedirect: true
-                                }};
+                                    const app = window.shopify.createApp({
+                                        apiKey: '{{ api_key }}',
+                                        host: host,
+                                        forceRedirect: true
+                                    });
 
-                                // Initialize app
-                                const app = window.shopify.createApp(config);
-                                const actions = window.shopify.actions;
+                                    const actions = window.shopify.actions;
+                                    const TitleBar = actions.TitleBar;
+                                    const titleBar = TitleBar.create(app, {
+                                        title: 'Smart Product Advisor'
+                                    });
 
-                                // Set up app-bridge actions
-                                const TitleBar = actions.TitleBar;
-                                const Button = actions.Button;
-                                const Loading = actions.Loading;
-                                const Modal = actions.Modal;
-                                const Redirect = actions.Redirect;
-                                const Toast = actions.Toast;
-
-                                // Create title bar
-                                const titleBarOptions = {{
-                                    title: 'Smart Product Advisor',
-                                }};
-                                const titleBar = TitleBar.create(app, titleBarOptions);
-
-                                // Handle session expiry
-                                function handleSessionExpiry(response) {{
-                                    if (response.status === 401 || response.status === 403) {{
-                                        const redirect = Redirect.create(app);
-                                        redirect.dispatch(Redirect.Action.REMOTE, '/install?shop={shop}');
-                                        return true;
-                                    }}
-                                    return false;
-                                }}
-
-                                // Function to get recommendations
-                                window.getRecommendations = function() {{
-                                    const priceRange = document.getElementById('priceRange').value;
-                                    const category = document.getElementById('category').value;
-                                    const preferences = document.getElementById('preferences').value;
-
-                                    // Show loading state
-                                    const loading = Loading.create(app);
-                                    loading.dispatch(Loading.Action.START);
-
-                                    // Hide previous recommendations
-                                    document.getElementById('recommendationsList').classList.add('hidden');
-
-                                    // Make API call
-                                    fetch('{APP_URL}/api/recommendations', {{
-                                        method: 'POST',
-                                        headers: {{
-                                            'Content-Type': 'application/json',
-                                            'X-Shop-Domain': '{shop}'
-                                        }},
-                                        credentials: 'include',
-                                        body: JSON.stringify({{
-                                            preferences: {{
-                                                price_range: priceRange,
-                                                category: category,
-                                                keywords: preferences.split(',').map(k => k.trim())
-                                            }}
-                                        }})
-                                    }})
-                                    .then(response => {{
-                                        if (handleSessionExpiry(response)) {{
-                                            throw new Error('Session expired');
-                                        }}
-                                        return response.json();
-                                    }})
-                                    .then(data => {{
-                                        loading.dispatch(Loading.Action.STOP);
-
-                                        if (!data.success) {{
-                                            throw new Error(data.error || 'Failed to get recommendations');
-                                        }}
-
-                                        const recommendationsList = document.getElementById('recommendationsList');
-                                        recommendationsList.innerHTML = '';
-                                        recommendationsList.classList.remove('hidden');
-
-                                        data.recommendations.forEach(rec => {{
-                                            const product = rec.product;
-                                            const card = `
-                                                <div class="bg-white rounded-lg shadow-md p-6 mb-4">
-                                                    ${{product.image_url ? `<img src="${{product.image_url}}" alt="${{product.title}}" class="w-full h-48 object-cover mb-4 rounded">` : ''}}
-                                                    <h3 class="text-lg font-semibold mb-2">${{product.title}}</h3>
-                                                    <p class="text-gray-600 mb-2">£${{product.price.toFixed(2)}}</p>
-                                                    <div class="mb-4">
-                                                        <div class="text-sm text-gray-500">Confidence Score: ${{(rec.confidence_score * 100).toFixed(1)}}%</div>
-                                                        <div class="text-sm text-gray-700 mt-2">${{rec.explanation}}</div>
-                                                    </div>
-                                                    <a href="${{product.url}}" target="_blank" class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">View Product</a>
-                                                </div>
-                                            `;
-                                            recommendationsList.innerHTML += card;
-                                        }});
-                                    }})
-                                    .catch(error => {{
-                                        loading.dispatch(Loading.Action.STOP);
-                                        console.error('Error:', error);
-                                        
-                                        const toast = Toast.create(app, {{
-                                            message: `Error: ${{error.message}}`,
-                                            duration: 5000,
-                                            isError: true
-                                        }});
-                                        toast.dispatch(Toast.Action.SHOW);
-                                    }});
-                                }};
-                            }} catch (error) {{
-                                console.error('Error initializing app:', error);
-                            }}
-                        }});
-                    </script>
-                </head>
-                <body class="bg-gray-100 p-6">
-                    <div class="max-w-4xl mx-auto">
-                        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
-                            <h2 class="text-xl font-semibold mb-4">Get Product Recommendations</h2>
-                            <div class="space-y-4">
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-700 mb-1">Price Range</label>
-                                    <select id="priceRange" class="w-full border border-gray-300 rounded-md px-3 py-2">
-                                        <option value="any">Any Price</option>
-                                        <option value="0-50">£0 - £50</option>
-                                        <option value="50-100">£50 - £100</option>
-                                        <option value="100-200">£100 - £200</option>
-                                        <option value="200+">£200+</option>
-                                    </select>
-                                </div>
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-700 mb-1">Category</label>
-                                    <select id="category" class="w-full border border-gray-300 rounded-md px-3 py-2">
-                                        <option value="any">Any Category</option>
-                                        <option value="clothing">Clothing</option>
-                                        <option value="accessories">Accessories</option>
-                                        <option value="electronics">Electronics</option>
-                                        <option value="home">Home & Living</option>
-                                    </select>
-                                </div>
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-700 mb-1">Preferences (comma-separated)</label>
-                                    <input type="text" id="preferences" class="w-full border border-gray-300 rounded-md px-3 py-2" placeholder="e.g., casual, comfortable, modern">
-                                </div>
-                                <button onclick="getRecommendations()" class="w-full bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">
-                                    Get Recommendations
-                                </button>
-                            </div>
-                        </div>
-                        <div id="recommendationsList" class="space-y-4 hidden"></div>
-                    </div>
-                </body>
-            </html>
-            """
+                                    console.log('App initialized successfully');
+                                } catch (error) {
+                                    console.error('Error initializing app:', error);
+                                    document.body.innerHTML = '<div style="color: red; padding: 2em;">Error: ' + error.message + '</div>';
+                                }
+                            });
+                        </script>
+                    </head>
+                    <body>
+                        <div id="app">Loading Smart Product Advisor...</div>
+                    </body>
+                </html>
+            """, api_key=SHOPIFY_API_KEY))
             
-            response = make_response(html_content)
-            response.headers['Content-Type'] = 'text/html'
-            
-            # Set cookie
+            # Set cookie with explicit settings
             response.set_cookie(
                 'sp_session',
                 session.sid,
                 secure=True,
                 httponly=True,
                 samesite='None',
+                domain='.onrender.com',
                 path='/'
             )
             
