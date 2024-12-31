@@ -18,6 +18,11 @@ services:
         value: 2
       - key: GUNICORN_CMD_ARGS
         value: "--timeout 180 --keep-alive 5 --log-level debug"
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: smart-advisor-redis
+          property: connectionString
     healthCheckPath: /health
     autoDeploy: true
     plan: starter

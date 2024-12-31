@@ -17,6 +17,7 @@ import requests
 import datetime
 from flask_session import Session
 from dotenv import load_dotenv
+import redis
 
 # Load environment variables
 load_dotenv()
@@ -35,13 +36,13 @@ app.secret_key = os.environ.get('FLASK_SECRET_KEY', os.urandom(32))
 
 # Configure session with more robust settings
 app.config.update(
-    SESSION_TYPE='filesystem',
+    SESSION_TYPE='redis',
+    SESSION_REDIS=redis.from_url(os.environ.get('REDIS_URL', 'redis://localhost:6379')),
     SESSION_COOKIE_SECURE=True,
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE='None',
     PERMANENT_SESSION_LIFETIME=datetime.timedelta(days=1),
-    SESSION_COOKIE_NAME='sp_session',
-    SESSION_REFRESH_EACH_REQUEST=True,
+    SESSION_COOKIE_NAME='sp_session'
 )
 
 # Initialize Flask-Session
@@ -590,7 +591,8 @@ def install():
     """Initial route for app installation"""
     try:
         shop = request.args.get('shop')
-        host = request.args.get('host')
+        host = request.args.get('host', '')
+        embedded = request.args.get('embedded', '1')
         
         if not shop:
             return jsonify({"error": "Missing shop parameter"}), 400
@@ -604,7 +606,7 @@ def install():
         session['state'] = state
         session['shop'] = shop
         
-        # Create permission URL
+        # Create permission URL with all parameters
         redirect_uri = f"{APP_URL}/auth/callback"
         auth_url = shopify_session.create_permission_url(
             SCOPES,
@@ -612,11 +614,30 @@ def install():
             state
         )
         
-        # Add host parameter if present
-        if host:
-            auth_url += f"&host={host}"
-            
-        return redirect(auth_url)
+        # Add additional parameters
+        auth_url += f"&host={host}" if host else ""
+        auth_url += f"&embedded={embedded}"
+        
+        # Create response with proper headers
+        response = make_response(redirect(auth_url))
+        response.headers['Content-Security-Policy'] = (
+            "frame-ancestors https://*.myshopify.com "
+            "https://admin.shopify.com "
+            "https://*.shopify.com "
+            "https://partners.shopify.com"
+        )
+        
+        # Set secure cookie
+        response.set_cookie(
+            'sp_session',
+            session.sid,
+            secure=True,
+            httponly=True,
+            samesite='None',
+            path='/'
+        )
+        
+        return response
         
     except Exception as e:
         logger.error(f"Installation error: {str(e)}")
@@ -725,7 +746,8 @@ def callback():
     """Handle OAuth callback from Shopify"""
     try:
         shop = request.args.get('shop')
-        host = request.args.get('host')
+        host = request.args.get('host', '')
+        embedded = request.args.get('embedded', '1')
         
         if not shop:
             return jsonify({"error": "Missing shop parameter"}), 400
@@ -734,7 +756,8 @@ def callback():
         state = request.args.get('state')
         stored_state = session.get('state')
         if not state or not stored_state or state != stored_state:
-            return jsonify({"error": "Invalid state parameter"}), 400
+            logger.warning(f"State mismatch. Received: {state}, Stored: {stored_state}")
+            return redirect(f"/install?shop={shop}&host={host}&embedded={embedded}")
             
         # Setup Shopify session
         shopify.Session.setup(api_key=SHOPIFY_API_KEY, secret=SHOPIFY_API_SECRET)
@@ -744,7 +767,7 @@ def callback():
             # Request access token
             access_token = shopify_session.request_token(request.args)
             if not access_token:
-                return redirect(f"/install?shop={shop}")
+                return redirect(f"/install?shop={shop}&host={host}&embedded={embedded}")
                 
             # Store token in session
             session['access_token'] = access_token
