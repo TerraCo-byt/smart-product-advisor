@@ -3,8 +3,10 @@ services:
     name: smart-product-advisor
     runtime: python
     region: ohio
-    buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app --workers 4 --worker-class gthread --threads 2 --timeout 120 --access-logfile '-' --error-logfile '-'
+    buildCommand: |
+      python -m pip install --upgrade pip
+      pip install -r requirements.txt
+    startCommand: gunicorn app:app --workers 2 --worker-class gthread --threads 4 --timeout 180 --access-logfile '-' --error-logfile '-' --log-level debug
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
@@ -13,19 +15,20 @@ services:
       - key: FLASK_ENV
         value: production
       - key: WEB_CONCURRENCY
-        value: 4
+        value: 2
       - key: GUNICORN_CMD_ARGS
-        value: "--timeout 120 --keep-alive 5 --log-level debug"
+        value: "--timeout 180 --keep-alive 5 --log-level debug"
     healthCheckPath: /health
     autoDeploy: true
     plan: starter
     scaling:
       minInstances: 1
       maxInstances: 1
-      targetMemoryPercent: 80
-      targetCPUPercent: 80
+      targetMemoryPercent: 70
+      targetCPUPercent: 70
 
   - type: redis
     name: smart-advisor-redis
     ipAllowList: []
-    plan: free 
+    plan: free
+    maxmemoryPolicy: noeviction 
