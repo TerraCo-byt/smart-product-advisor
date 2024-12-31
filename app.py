@@ -504,6 +504,8 @@ def app_page():
     """Main app page that loads in the Shopify Admin"""
     try:
         shop = request.args.get('shop')
+        host = request.args.get('host')
+        
         if not shop:
             return jsonify({"error": "Missing shop parameter"}), 400
 
@@ -531,9 +533,10 @@ def app_page():
                             <script src="https://unpkg.com/@shopify/app-bridge-utils@3"></script>
                             <script>
                                 window.addEventListener('load', function() {
+                                    const host = new URLSearchParams(window.location.search).get('host');
                                     const config = {
                                         apiKey: '{{ api_key }}',
-                                        host: window.location.host,
+                                        host: host,
                                         forceRedirect: true
                                     };
                                     window.app = window.shopify.createApp(config);
@@ -552,8 +555,11 @@ def app_page():
                 logger.error(f"Failed to verify shop access: {str(e)}")
                 session.clear()
         
-        # No valid session, redirect to install
-        return redirect(f"/install?shop={shop}")
+        # No valid session, redirect to install with host parameter
+        install_url = f"/install?shop={shop}"
+        if host:
+            install_url += f"&host={host}"
+        return redirect(install_url)
             
     except Exception as e:
         logger.error(f"App page error: {str(e)}")
@@ -567,6 +573,8 @@ def install():
     """Initial route for app installation"""
     try:
         shop = request.args.get('shop')
+        host = request.args.get('host')
+        
         if not shop:
             return jsonify({"error": "Missing shop parameter"}), 400
             
@@ -587,6 +595,10 @@ def install():
             state
         )
         
+        # Add host parameter if present
+        if host:
+            auth_url += f"&host={host}"
+            
         return redirect(auth_url)
         
     except Exception as e:
@@ -696,6 +708,8 @@ def callback():
     """Handle OAuth callback from Shopify"""
     try:
         shop = request.args.get('shop')
+        host = request.args.get('host')
+        
         if not shop:
             return jsonify({"error": "Missing shop parameter"}), 400
             
@@ -719,8 +733,11 @@ def callback():
             session['access_token'] = access_token
             session['shop'] = shop
             
-            # Redirect to app with shop parameter
-            return redirect(f"/app?shop={shop}")
+            # Redirect to app with shop and host parameters
+            app_url = f"/app?shop={shop}"
+            if host:
+                app_url += f"&host={host}"
+            return redirect(app_url)
             
         except Exception as e:
             logger.error(f"Error requesting access token: {str(e)}")
