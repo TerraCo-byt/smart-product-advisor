@@ -93,26 +93,14 @@ def after_request(response):
         
         # Set frame ancestors for embedded app
         response.headers['Content-Security-Policy'] = (
-            "frame-ancestors 'self' "
-            "https://*.myshopify.com "
+            "frame-ancestors https://*.myshopify.com "
             "https://admin.shopify.com "
-            "https://*.shopify.com;"
+            "https://*.shopify.com "
+            "https://partners.shopify.com"
         )
-        response.headers['X-Frame-Options'] = 'ALLOWALL'
-        
-        # Handle cookies
-        if 'Set-Cookie' in response.headers:
-            cookies = response.headers.getlist('Set-Cookie')
-            response.headers.remove('Set-Cookie')
-            for cookie in cookies:
-                if 'SameSite=' not in cookie:
-                    cookie += '; SameSite=None'
-                if 'Secure' not in cookie:
-                    cookie += '; Secure'
-                if 'Domain=' not in cookie:
-                    # Allow cookie to be shared between app domain and Shopify admin
-                    cookie += f'; Domain=.onrender.com'
-                response.headers.add('Set-Cookie', cookie)
+        # Remove X-Frame-Options as it's not needed when CSP frame-ancestors is present
+        if 'X-Frame-Options' in response.headers:
+            del response.headers['X-Frame-Options']
     
     # Add security headers
     response.headers['X-Content-Type-Options'] = 'nosniff'
@@ -505,6 +493,7 @@ def app_page():
     try:
         shop = request.args.get('shop')
         host = request.args.get('host')
+        embedded = request.args.get('embedded', '1')
         
         if not shop:
             return jsonify({"error": "Missing shop parameter"}), 400
@@ -534,12 +523,27 @@ def app_page():
                             <script>
                                 window.addEventListener('load', function() {
                                     const host = new URLSearchParams(window.location.search).get('host');
+                                    if (!host) {
+                                        console.error('Missing host parameter');
+                                        return;
+                                    }
+                                    
                                     const config = {
                                         apiKey: '{{ api_key }}',
                                         host: host,
                                         forceRedirect: true
                                     };
-                                    window.app = window.shopify.createApp(config);
+                                    
+                                    try {
+                                        window.app = window.shopify.createApp(config);
+                                        const actions = window.shopify.actions;
+                                        const TitleBar = actions.TitleBar;
+                                        TitleBar.create(window.app, {
+                                            title: 'Smart Product Advisor'
+                                        });
+                                    } catch (error) {
+                                        console.error('Error initializing app:', error);
+                                    }
                                 });
                             </script>
                         </head>
@@ -548,6 +552,17 @@ def app_page():
                         </body>
                     </html>
                 """, api_key=SHOPIFY_API_KEY))
+                
+                # Set security headers for embedding
+                response.headers['Content-Security-Policy'] = (
+                    "frame-ancestors https://*.myshopify.com "
+                    "https://admin.shopify.com "
+                    "https://*.shopify.com "
+                    "https://partners.shopify.com"
+                )
+                # Remove X-Frame-Options as it's not needed when CSP frame-ancestors is present
+                if 'X-Frame-Options' in response.headers:
+                    del response.headers['X-Frame-Options']
                 
                 return response
                 
@@ -559,6 +574,8 @@ def app_page():
         install_url = f"/install?shop={shop}"
         if host:
             install_url += f"&host={host}"
+        if embedded:
+            install_url += f"&embedded={embedded}"
         return redirect(install_url)
             
     except Exception as e:
