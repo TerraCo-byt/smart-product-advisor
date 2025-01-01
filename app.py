@@ -34,34 +34,16 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 app.secret_key = os.environ.get('FLASK_SECRET_KEY', os.urandom(32))
 
-# Configure Redis
-REDIS_URL = os.environ.get('REDIS_URL', 'redis://localhost:6379')
-redis_client = redis.from_url(REDIS_URL)
-
-# Configure session with filesystem fallback if Redis fails
-try:
-    redis_client.ping()
-    logger.info("Redis connection successful")
-    app.config.update(
-        SESSION_TYPE='redis',
-        SESSION_REDIS=redis_client,
-        SESSION_COOKIE_SECURE=True,
-        SESSION_COOKIE_HTTPONLY=True,
-        SESSION_COOKIE_SAMESITE='None',
-        PERMANENT_SESSION_LIFETIME=datetime.timedelta(days=1),
-        SESSION_COOKIE_NAME='sp_session'
-    )
-except redis.ConnectionError:
-    logger.warning("Redis connection failed, falling back to filesystem sessions")
-    app.config.update(
-        SESSION_TYPE='filesystem',
-        SESSION_FILE_DIR='/tmp/flask_session',
-        SESSION_COOKIE_SECURE=True,
-        SESSION_COOKIE_HTTPONLY=True,
-        SESSION_COOKIE_SAMESITE='None',
-        PERMANENT_SESSION_LIFETIME=datetime.timedelta(days=1),
-        SESSION_COOKIE_NAME='sp_session'
-    )
+# Configure session
+app.config.update(
+    SESSION_TYPE='filesystem',
+    SESSION_FILE_DIR='/tmp/flask_session',
+    SESSION_COOKIE_SECURE=True,
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='None',
+    PERMANENT_SESSION_LIFETIME=datetime.timedelta(days=1),
+    SESSION_COOKIE_NAME='sp_session'
+)
 
 # Initialize Flask-Session
 Session(app)
@@ -71,7 +53,7 @@ CORS(app,
      supports_credentials=True,
      resources={
         r"/*": {
-            "origins": "*",
+            "origins": ["https://admin.shopify.com", "https://*.myshopify.com"],
             "methods": ["GET", "POST", "OPTIONS"],
             "allow_headers": ["Content-Type", "X-Shop-Domain", "Authorization", "Origin", "Cookie"],
             "expose_headers": ["Set-Cookie"],
@@ -86,7 +68,7 @@ def before_request():
     if request.method == 'OPTIONS':
         response = make_response()
         origin = request.headers.get('Origin', '')
-        if origin:
+        if origin and ('admin.shopify.com' in origin or '.myshopify.com' in origin):
             response.headers['Access-Control-Allow-Origin'] = origin
             response.headers['Access-Control-Allow-Credentials'] = 'true'
             response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
@@ -103,7 +85,7 @@ def before_request():
 def after_request(response):
     """Ensure proper headers for cookies and CORS"""
     origin = request.headers.get('Origin', '')
-    if origin:
+    if origin and ('admin.shopify.com' in origin or '.myshopify.com' in origin):
         response.headers['Access-Control-Allow-Origin'] = origin
         response.headers['Access-Control-Allow-Credentials'] = 'true'
         
@@ -619,27 +601,6 @@ def install():
             
         logger.info(f"Installation requested for shop: {shop}")
         
-        # Check if we already have a valid session
-        if session.get('access_token') and session.get('shop') == shop:
-            try:
-                # Verify the token still works
-                shopify.Session.setup(api_key=SHOPIFY_API_KEY, secret=SHOPIFY_API_SECRET)
-                shopify_session = shopify.Session(shop, API_VERSION)
-                shopify_session.token = session.get('access_token')
-                shopify.ShopifyResource.activate_session(shopify_session)
-                shop_data = shopify.Shop.current()
-                logger.info(f"Found valid session for shop: {shop_data.name}")
-                
-                app_url = f"/app?shop={shop}"
-                if host:
-                    app_url += f"&host={host}"
-                if embedded:
-                    app_url += f"&embedded={embedded}"
-                return redirect(app_url)
-            except:
-                logger.info("Invalid session, proceeding with new installation")
-                session.clear()
-        
         # Generate a nonce for state validation
         state = base64.b64encode(os.urandom(16)).decode('utf-8')
         session['state'] = state
@@ -671,16 +632,6 @@ def install():
             "https://admin.shopify.com "
             "https://*.shopify.com "
             "https://partners.shopify.com"
-        )
-        
-        # Set secure cookie
-        response.set_cookie(
-            'sp_session',
-            session.sid,
-            secure=True,
-            httponly=True,
-            samesite='None',
-            path='/'
         )
         
         return response
