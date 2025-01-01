@@ -119,19 +119,9 @@ if not APP_URL:
     APP_URL = os.environ.get('APP_URL', 'http://localhost:8000')
 logger.info(f"Using APP_URL: {APP_URL}")
 
-SCOPES = ['read_products', 'write_products', 'read_themes', 'write_themes']
-
 # Set API Version
-AVAILABLE_VERSIONS = [
-    '2023-07',
-    '2023-04',
-    '2023-01'
-]
-
-# Use the most recent version
-API_VERSION = AVAILABLE_VERSIONS[0]
-logger.info(f"Using Shopify API version: {API_VERSION}")
-logger.info(f"Available API versions: {AVAILABLE_VERSIONS}")
+API_VERSION = '2024-01'
+SCOPES = ['read_products', 'write_products', 'read_themes', 'write_themes']
 
 # Validate configuration
 if not SHOPIFY_API_KEY or not SHOPIFY_API_SECRET:
@@ -587,6 +577,11 @@ def app_page():
     finally:
         shopify.ShopifyResource.clear_session()
 
+@app.route('/favicon.ico')
+def favicon():
+    """Handle favicon requests"""
+    return '', 204
+
 @app.route('/install')
 def install():
     """Initial route for app installation"""
@@ -600,6 +595,8 @@ def install():
             return jsonify({"error": "Missing shop parameter"}), 400
             
         logger.info(f"Installation requested for shop: {shop}")
+        logger.info(f"Request headers: {dict(request.headers)}")
+        logger.info(f"Request args: {dict(request.args)}")
         
         # Generate a nonce for state validation
         state = base64.b64encode(os.urandom(16)).decode('utf-8')
@@ -627,11 +624,25 @@ def install():
         
         # Create response with proper headers
         response = make_response(redirect(auth_url))
-        response.headers['Content-Security-Policy'] = (
-            "frame-ancestors https://*.myshopify.com "
-            "https://admin.shopify.com "
-            "https://*.shopify.com "
-            "https://partners.shopify.com"
+        response.headers.update({
+            'Content-Security-Policy': (
+                "frame-ancestors https://*.myshopify.com "
+                "https://admin.shopify.com "
+                "https://*.shopify.com "
+                "https://partners.shopify.com"
+            ),
+            'Access-Control-Allow-Origin': request.headers.get('Origin', ''),
+            'Access-Control-Allow-Credentials': 'true'
+        })
+        
+        # Set secure cookie
+        response.set_cookie(
+            'sp_session',
+            session.sid,
+            secure=True,
+            httponly=True,
+            samesite='None',
+            path='/'
         )
         
         return response
@@ -787,12 +798,16 @@ def callback():
                 app_url += f"&embedded={embedded}"
                 
             response = make_response(redirect(app_url))
-            response.headers['Content-Security-Policy'] = (
-                "frame-ancestors https://*.myshopify.com "
-                "https://admin.shopify.com "
-                "https://*.shopify.com "
-                "https://partners.shopify.com"
-            )
+            response.headers.update({
+                'Content-Security-Policy': (
+                    "frame-ancestors https://*.myshopify.com "
+                    "https://admin.shopify.com "
+                    "https://*.shopify.com "
+                    "https://partners.shopify.com"
+                ),
+                'Access-Control-Allow-Origin': request.headers.get('Origin', ''),
+                'Access-Control-Allow-Credentials': 'true'
+            })
             
             # Set secure cookie
             response.set_cookie(
