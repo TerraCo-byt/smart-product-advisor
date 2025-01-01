@@ -30,9 +30,19 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Set API Version
+API_VERSION = '2023-10'
+SCOPES = ['read_products', 'write_products', 'read_themes', 'write_themes']
+
 # Initialize Flask app
 app = Flask(__name__)
 app.secret_key = os.environ.get('FLASK_SECRET_KEY', os.urandom(32))
+
+# Basic configuration
+SHOPIFY_API_KEY = os.environ.get('SHOPIFY_API_KEY')
+SHOPIFY_API_SECRET = os.environ.get('SHOPIFY_API_SECRET')
+APP_URL = os.environ.get('RENDER_EXTERNAL_URL', os.environ.get('APP_URL', 'http://localhost:8000'))
+HUGGINGFACE_API_TOKEN = os.environ.get('HUGGINGFACE_API_TOKEN')
 
 # Configure session
 app.config.update(
@@ -110,19 +120,6 @@ def after_request(response):
     
     return response
 
-# Configuration
-SHOPIFY_API_KEY = os.environ.get('SHOPIFY_API_KEY')
-SHOPIFY_API_SECRET = os.environ.get('SHOPIFY_API_SECRET')
-APP_URL = os.environ.get('RENDER_EXTERNAL_URL')
-if not APP_URL:
-    logger.error("RENDER_EXTERNAL_URL not set!")
-    APP_URL = os.environ.get('APP_URL', 'http://localhost:8000')
-logger.info(f"Using APP_URL: {APP_URL}")
-
-# Set API Version
-API_VERSION = '2023-10'
-SCOPES = ['read_products', 'write_products', 'read_themes', 'write_themes']
-
 # Get available API versions
 AVAILABLE_VERSIONS = shopify.ApiVersion.versions
 logger.info(f"Available Shopify API versions: {AVAILABLE_VERSIONS}")
@@ -139,11 +136,6 @@ if not SHOPIFY_API_KEY or not SHOPIFY_API_SECRET:
     raise ValueError("Missing required environment variables: SHOPIFY_API_KEY and SHOPIFY_API_SECRET")
 
 # Hugging Face configuration
-HUGGINGFACE_API_TOKEN = os.environ.get('HUGGINGFACE_API_TOKEN')
-if not HUGGINGFACE_API_TOKEN:
-    logger.error("Missing Hugging Face API token!")
-    raise ValueError("Missing required environment variable: HUGGINGFACE_API_TOKEN")
-
 HUGGINGFACE_API_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2"
 
 def verify_hmac(params):
@@ -722,30 +714,40 @@ def debug():
 
 @app.route('/health')
 def health_check():
-    """Health check endpoint"""
+    """Health check endpoint for Render"""
     try:
-        # Check if we can access environment variables
-        if not SHOPIFY_API_KEY or not SHOPIFY_API_SECRET:
-            raise ValueError("Missing required environment variables")
-
-        # Check if we can create a session
-        shopify.Session.setup(api_key=SHOPIFY_API_KEY, secret=SHOPIFY_API_SECRET)
-        
-        # Check if we can access the database (if needed)
-        # Add any other critical checks here
-        
+        # Validate API version
+        versions = [str(version) for version in shopify.ApiVersion.versions]
+        if API_VERSION not in versions:
+            return jsonify({
+                "status": "warning",
+                "message": f"Invalid API version: {API_VERSION}. Available versions: {versions}"
+            }), 200
+            
+        # Check required environment variables
+        missing_vars = []
+        if not SHOPIFY_API_KEY:
+            missing_vars.append("SHOPIFY_API_KEY")
+        if not SHOPIFY_API_SECRET:
+            missing_vars.append("SHOPIFY_API_SECRET")
+        if not HUGGINGFACE_API_TOKEN:
+            missing_vars.append("HUGGINGFACE_API_TOKEN")
+            
+        if missing_vars:
+            return jsonify({
+                "status": "warning",
+                "message": f"Missing environment variables: {', '.join(missing_vars)}"
+            }), 200
+            
         return jsonify({
-            'status': 'healthy',
-            'timestamp': datetime.datetime.utcnow().isoformat(),
-            'app_url': APP_URL,
-            'api_version': API_VERSION
+            "status": "healthy",
+            "api_version": API_VERSION,
+            "timestamp": datetime.datetime.now().isoformat()
         }), 200
     except Exception as e:
-        logger.error(f"Health check failed: {str(e)}")
         return jsonify({
-            'status': 'unhealthy',
-            'error': str(e),
-            'timestamp': datetime.datetime.utcnow().isoformat()
+            "status": "error",
+            "error": str(e)
         }), 500
 
 # Error handlers
