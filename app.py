@@ -143,24 +143,29 @@ def verify_hmac(params):
         if not hmac_value:
             return False
             
-        params_copy = params.copy()
-        params_copy.pop('hmac', None)
+        # Create a new dictionary with only the parameters to verify
+        params_to_verify = dict(params)
+        params_to_verify.pop('hmac', None)  # Remove hmac from params
         
-        # Sort and combine parameters
-        sorted_params = '&'.join([
-            f"{key}={value}"
-            for key, value in sorted(params_copy.items())
-        ])
+        # Sort parameters and create message
+        sorted_params = []
+        for key in sorted(params_to_verify.keys()):
+            sorted_params.append(f"{key}={params_to_verify[key]}")
+        message = '&'.join(sorted_params)
         
-        digest = hmac.new(
+        # Calculate HMAC
+        computed_hmac = hmac.new(
             SHOPIFY_API_SECRET.encode('utf-8'),
-            sorted_params.encode('utf-8'),
+            message.encode('utf-8'),
             hashlib.sha256
         ).hexdigest()
         
-        return hmac.compare_digest(digest.encode('utf-8'), hmac_value.encode('utf-8'))
+        # Compare HMACs
+        return hmac.compare_digest(computed_hmac.encode('utf-8'), hmac_value.encode('utf-8'))
+        
     except Exception as e:
         logger.error(f"HMAC verification error: {str(e)}")
+        logger.error(traceback.format_exc())
         return False
 
 def generate_product_recommendations(products, preferences):
@@ -598,10 +603,20 @@ def install():
         logger.info(f"Request headers: {dict(request.headers)}")
         logger.info(f"Request args: {dict(request.args)}")
         
+        # Verify HMAC if present
+        if 'hmac' in request.args:
+            if not verify_hmac(request.args):
+                logger.error("HMAC verification failed")
+                return jsonify({"error": "Invalid HMAC"}), 400
+
+        # Create session
+        if 'session' not in g:
+            g.session = {}
+        
         # Generate a nonce for state validation
         state = base64.b64encode(os.urandom(16)).decode('utf-8')
-        session['state'] = state
-        session['shop'] = shop
+        g.session['state'] = state
+        g.session['shop'] = shop
         
         # Create permission URL
         shopify.Session.setup(api_key=SHOPIFY_API_KEY, secret=SHOPIFY_API_SECRET)
@@ -631,26 +646,26 @@ def install():
                 "https://*.shopify.com "
                 "https://partners.shopify.com"
             ),
-            'Access-Control-Allow-Origin': request.headers.get('Origin', ''),
-            'Access-Control-Allow-Credentials': 'true'
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+            'Access-Control-Allow-Headers': 'Content-Type, X-Shop-Domain, Authorization'
         })
         
-        # Set secure cookie
-        response.set_cookie(
-            'sp_session',
-            session.sid,
-            secure=True,
-            httponly=True,
-            samesite='None',
-            path='/'
-        )
+        # Set session cookie
+        session['state'] = state
+        session['shop'] = shop
+        session.permanent = True
         
         return response
         
     except Exception as e:
         logger.error(f"Installation error: {str(e)}")
         logger.error(traceback.format_exc())
-        return jsonify({"error": str(e)}), 500
+        return jsonify({
+            "error": "Internal server error",
+            "details": str(e),
+            "trace": traceback.format_exc()
+        }), 500
 
 @app.route('/')
 def home():
