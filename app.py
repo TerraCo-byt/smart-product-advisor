@@ -595,19 +595,42 @@ def install():
         embedded = request.args.get('embedded', '1')
         
         if not shop:
+            logger.error("Missing shop parameter")
             return jsonify({"error": "Missing shop parameter"}), 400
             
-        # Generate installation URL
-        shopify.Session.setup(api_key=SHOPIFY_API_KEY, secret=SHOPIFY_API_SECRET)
-        shopify_session = shopify.Session(shop, API_VERSION)
+        logger.info(f"Installation requested for shop: {shop}")
+        
+        # Check if we already have a valid session
+        if session.get('access_token') and session.get('shop') == shop:
+            try:
+                # Verify the token still works
+                shopify.Session.setup(api_key=SHOPIFY_API_KEY, secret=SHOPIFY_API_SECRET)
+                shopify_session = shopify.Session(shop, API_VERSION)
+                shopify_session.token = session.get('access_token')
+                shopify.ShopifyResource.activate_session(shopify_session)
+                shop_data = shopify.Shop.current()
+                logger.info(f"Found valid session for shop: {shop_data.name}")
+                
+                app_url = f"/app?shop={shop}"
+                if host:
+                    app_url += f"&host={host}"
+                if embedded:
+                    app_url += f"&embedded={embedded}"
+                return redirect(app_url)
+            except:
+                logger.info("Invalid session, proceeding with new installation")
+                session.clear()
         
         # Generate a nonce for state validation
         state = base64.b64encode(os.urandom(16)).decode('utf-8')
         session['state'] = state
         session['shop'] = shop
         
-        # Create permission URL with all parameters
+        # Create permission URL
+        shopify.Session.setup(api_key=SHOPIFY_API_KEY, secret=SHOPIFY_API_SECRET)
+        shopify_session = shopify.Session(shop, API_VERSION)
         redirect_uri = f"{APP_URL}/auth/callback"
+        
         auth_url = shopify_session.create_permission_url(
             SCOPES,
             redirect_uri,
@@ -615,8 +638,12 @@ def install():
         )
         
         # Add additional parameters
-        auth_url += f"&host={host}" if host else ""
-        auth_url += f"&embedded={embedded}"
+        if host:
+            auth_url += f"&host={host}"
+        if embedded:
+            auth_url += f"&embedded={embedded}"
+            
+        logger.info(f"Generated auth URL: {auth_url}")
         
         # Create response with proper headers
         response = make_response(redirect(auth_url))
@@ -641,6 +668,7 @@ def install():
         
     except Exception as e:
         logger.error(f"Installation error: {str(e)}")
+        logger.error(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
 
 @app.route('/')
@@ -750,7 +778,11 @@ def callback():
         embedded = request.args.get('embedded', '1')
         
         if not shop:
+            logger.error("Missing shop parameter in callback")
             return jsonify({"error": "Missing shop parameter"}), 400
+            
+        logger.info(f"Auth callback received for shop: {shop}")
+        logger.info(f"Callback parameters: {dict(request.args)}")
             
         # Verify state
         state = request.args.get('state')
@@ -767,24 +799,51 @@ def callback():
             # Request access token
             access_token = shopify_session.request_token(request.args)
             if not access_token:
+                logger.error("No access token received")
                 return redirect(f"/install?shop={shop}&host={host}&embedded={embedded}")
+                
+            logger.info("Access token received successfully")
                 
             # Store token in session
             session['access_token'] = access_token
             session['shop'] = shop
+            session.permanent = True
             
-            # Redirect to app with shop and host parameters
+            # Create response with proper headers
             app_url = f"/app?shop={shop}"
             if host:
                 app_url += f"&host={host}"
-            return redirect(app_url)
+            if embedded:
+                app_url += f"&embedded={embedded}"
+                
+            response = make_response(redirect(app_url))
+            response.headers['Content-Security-Policy'] = (
+                "frame-ancestors https://*.myshopify.com "
+                "https://admin.shopify.com "
+                "https://*.shopify.com "
+                "https://partners.shopify.com"
+            )
+            
+            # Set secure cookie
+            response.set_cookie(
+                'sp_session',
+                session.sid,
+                secure=True,
+                httponly=True,
+                samesite='None',
+                path='/'
+            )
+            
+            return response
             
         except Exception as e:
             logger.error(f"Error requesting access token: {str(e)}")
-            return redirect(f"/install?shop={shop}")
+            logger.error(traceback.format_exc())
+            return redirect(f"/install?shop={shop}&host={host}&embedded={embedded}")
         
     except Exception as e:
         logger.error(f"Callback error: {str(e)}")
+        logger.error(traceback.format_exc())
         return redirect(f"/install?shop={shop}")
     finally:
         shopify.ShopifyResource.clear_session()
