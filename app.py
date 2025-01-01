@@ -2,7 +2,7 @@ import os
 import sys
 import logging
 import traceback
-from flask import Flask, request, jsonify, redirect, session, Response, make_response, render_template_string
+from flask import Flask, request, jsonify, redirect, session, Response, make_response, render_template_string, g
 from flask_cors import CORS
 from flask.sessions import SessionInterface
 import shopify
@@ -609,14 +609,8 @@ def install():
                 logger.error("HMAC verification failed")
                 return jsonify({"error": "Invalid HMAC"}), 400
 
-        # Create session
-        if 'session' not in g:
-            g.session = {}
-        
         # Generate a nonce for state validation
         state = base64.b64encode(os.urandom(16)).decode('utf-8')
-        g.session['state'] = state
-        g.session['shop'] = shop
         
         # Create permission URL
         shopify.Session.setup(api_key=SHOPIFY_API_KEY, secret=SHOPIFY_API_SECRET)
