@@ -23,6 +23,8 @@ services:
           type: redis
           name: smart-advisor-redis
           property: connectionString
+      - key: FLASK_SECRET_KEY
+        generateValue: true
     healthCheckPath: /health
     autoDeploy: true
     plan: starter
@@ -36,4 +38,5 @@ services:
     name: smart-advisor-redis
     ipAllowList: []
     plan: free
-    maxmemoryPolicy: noeviction 
+    maxmemoryPolicy: noeviction
+    maxmemoryMb: 25 

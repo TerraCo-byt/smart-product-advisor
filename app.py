@@ -34,16 +34,34 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 app.secret_key = os.environ.get('FLASK_SECRET_KEY', os.urandom(32))
 
-# Configure session with more robust settings
-app.config.update(
-    SESSION_TYPE='redis',
-    SESSION_REDIS=redis.from_url(os.environ.get('REDIS_URL', 'redis://localhost:6379')),
-    SESSION_COOKIE_SECURE=True,
-    SESSION_COOKIE_HTTPONLY=True,
-    SESSION_COOKIE_SAMESITE='None',
-    PERMANENT_SESSION_LIFETIME=datetime.timedelta(days=1),
-    SESSION_COOKIE_NAME='sp_session'
-)
+# Configure Redis
+REDIS_URL = os.environ.get('REDIS_URL', 'redis://localhost:6379')
+redis_client = redis.from_url(REDIS_URL)
+
+# Configure session with filesystem fallback if Redis fails
+try:
+    redis_client.ping()
+    logger.info("Redis connection successful")
+    app.config.update(
+        SESSION_TYPE='redis',
+        SESSION_REDIS=redis_client,
+        SESSION_COOKIE_SECURE=True,
+        SESSION_COOKIE_HTTPONLY=True,
+        SESSION_COOKIE_SAMESITE='None',
+        PERMANENT_SESSION_LIFETIME=datetime.timedelta(days=1),
+        SESSION_COOKIE_NAME='sp_session'
+    )
+except redis.ConnectionError:
+    logger.warning("Redis connection failed, falling back to filesystem sessions")
+    app.config.update(
+        SESSION_TYPE='filesystem',
+        SESSION_FILE_DIR='/tmp/flask_session',
+        SESSION_COOKIE_SECURE=True,
+        SESSION_COOKIE_HTTPONLY=True,
+        SESSION_COOKIE_SAMESITE='None',
+        PERMANENT_SESSION_LIFETIME=datetime.timedelta(days=1),
+        SESSION_COOKIE_NAME='sp_session'
+    )
 
 # Initialize Flask-Session
 Session(app)
@@ -55,7 +73,7 @@ CORS(app,
         r"/*": {
             "origins": "*",
             "methods": ["GET", "POST", "OPTIONS"],
-            "allow_headers": ["Content-Type", "X-Shop-Domain", "Authorization", "Origin", "Cookie", "X-Requested-With"],
+            "allow_headers": ["Content-Type", "X-Shop-Domain", "Authorization", "Origin", "Cookie"],
             "expose_headers": ["Set-Cookie"],
             "supports_credentials": True,
             "max_age": 3600
@@ -65,13 +83,14 @@ CORS(app,
 @app.before_request
 def before_request():
     """Setup request context and handle CORS preflight"""
-    # Handle CORS preflight requests
     if request.method == 'OPTIONS':
         response = make_response()
-        response.headers.add("Access-Control-Allow-Origin", request.headers.get('Origin', '*'))
-        response.headers.add('Access-Control-Allow-Headers', "*")
-        response.headers.add('Access-Control-Allow-Methods', "*")
-        response.headers.add('Access-Control-Allow-Credentials', 'true')
+        origin = request.headers.get('Origin', '')
+        if origin:
+            response.headers['Access-Control-Allow-Origin'] = origin
+            response.headers['Access-Control-Allow-Credentials'] = 'true'
+            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, X-Shop-Domain, Authorization, Origin, Cookie'
         return response
 
     # Handle authentication
@@ -84,13 +103,9 @@ def before_request():
 def after_request(response):
     """Ensure proper headers for cookies and CORS"""
     origin = request.headers.get('Origin', '')
-    
-    # Allow Shopify admin and custom domains
     if origin:
         response.headers['Access-Control-Allow-Origin'] = origin
         response.headers['Access-Control-Allow-Credentials'] = 'true'
-        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
-        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, X-Shop-Domain, Authorization'
         
         # Set frame ancestors for embedded app
         response.headers['Content-Security-Policy'] = (
@@ -99,13 +114,17 @@ def after_request(response):
             "https://*.shopify.com "
             "https://partners.shopify.com"
         )
-        # Remove X-Frame-Options as it's not needed when CSP frame-ancestors is present
-        if 'X-Frame-Options' in response.headers:
-            del response.headers['X-Frame-Options']
-    
-    # Add security headers
-    response.headers['X-Content-Type-Options'] = 'nosniff'
-    response.headers['Referrer-Policy'] = 'no-referrer-when-downgrade'
+        
+        # Handle cookies
+        if 'Set-Cookie' in response.headers:
+            cookies = response.headers.getlist('Set-Cookie')
+            response.headers.remove('Set-Cookie')
+            for cookie in cookies:
+                if 'SameSite=' not in cookie:
+                    cookie += '; SameSite=None'
+                if 'Secure' not in cookie:
+                    cookie += '; Secure'
+                response.headers.add('Set-Cookie', cookie)
     
     return response
 
