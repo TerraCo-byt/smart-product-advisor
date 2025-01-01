@@ -120,8 +120,18 @@ if not APP_URL:
 logger.info(f"Using APP_URL: {APP_URL}")
 
 # Set API Version
-API_VERSION = '2024-01'
+API_VERSION = '2023-10'
 SCOPES = ['read_products', 'write_products', 'read_themes', 'write_themes']
+
+# Get available API versions
+AVAILABLE_VERSIONS = shopify.ApiVersion.versions
+logger.info(f"Available Shopify API versions: {AVAILABLE_VERSIONS}")
+
+# Validate API version
+if API_VERSION not in [str(version) for version in AVAILABLE_VERSIONS]:
+    logger.error(f"Invalid API version: {API_VERSION}")
+    logger.info(f"Available versions: {AVAILABLE_VERSIONS}")
+    raise ValueError(f"Invalid API version: {API_VERSION}. Available versions: {AVAILABLE_VERSIONS}")
 
 # Validate configuration
 if not SHOPIFY_API_KEY or not SHOPIFY_API_SECRET:
