@@ -206,403 +206,186 @@ def callback():
 
 @app.route('/app')
 def app_page():
-    """Main app page that loads in the Shopify Admin"""
+    """Main app interface"""
     try:
         shop = request.args.get('shop')
-        host = request.args.get('host')
-        embedded = request.args.get('embedded', '1')
-        
-        logger.info(f"App page requested for shop: {shop}")
-        logger.info(f"Host parameter: {host}")
-        logger.info(f"Embedded parameter: {embedded}")
-        
         if not shop:
             return jsonify({"error": "Missing shop parameter"}), 400
-
-        # Check if we have a valid session
-        if session.get('shop') != shop or not session.get('access_token'):
-            install_url = f"/install?shop={shop}"
-            if host:
-                install_url += f"&host={host}"
-            if embedded:
-                install_url += f"&embedded={embedded}"
-            return redirect(install_url)
             
-        # Create response with HTML content
-        response = make_response(render_template_string("""
+        # Check session
+        if session.get('shop') != shop or not session.get('access_token'):
+            return redirect(f"/install?shop={shop}")
+            
+        # Return the main app interface
+        return render_template_string("""
             <!DOCTYPE html>
             <html>
                 <head>
                     <title>Smart Product Advisor</title>
                     <meta charset="utf-8">
                     <meta name="viewport" content="width=device-width, initial-scale=1">
-                    <script src="https://unpkg.com/@shopify/app-bridge@3"></script>
-                    <script src="https://unpkg.com/@shopify/app-bridge-utils@3"></script>
-                    <script>
-                        document.addEventListener('DOMContentLoaded', function() {
-                            const host = decodeURIComponent('{{ host }}');
-                            const shop = '{{ shop }}';
-                            
-                            console.log('Host:', host);
-                            console.log('Shop:', shop);
-                            
-                            if (!host || !shop) {
-                                console.error('Missing required parameters');
-                                document.getElementById('error-message').textContent = 'Missing required parameters';
-                                document.getElementById('error-message').classList.add('visible');
-                                return;
-                            }
-                            
-                            try {
-                                const config = {
-                                    apiKey: '{{ api_key }}',
-                                    host: host,
-                                    forceRedirect: true
-                                };
-                                
-                                console.log('App Bridge Config:', config);
-                                
-                                const AppBridge = window['app-bridge'];
-                                const createApp = AppBridge.default;
-                                const app = createApp(config);
-                                
-                                // Create the title bar
-                                const TitleBar = AppBridge.actions.TitleBar;
-                                TitleBar.create(app, {
-                                    title: 'Smart Product Advisor',
-                                    buttons: {
-                                        primary: {
-                                            label: 'Get Recommendations',
-                                            callback: () => {
-                                                getRecommendations();
-                                            }
-                                        }
-                                    }
-                                });
-                                
-                                // Hide loading message once app is initialized
-                                document.getElementById('loading-message').style.display = 'none';
-                                document.getElementById('app-content').style.display = 'block';
-                                
-                            } catch (error) {
-                                console.error('Error initializing app:', error);
-                                document.getElementById('error-message').textContent = 'Error initializing app: ' + error.message;
-                                document.getElementById('error-message').classList.add('visible');
-                                document.getElementById('loading-message').style.display = 'none';
-                            }
-                            
-                            // Handle form submission
-                            async function getRecommendations() {
-                                try {
-                                    document.getElementById('recommendations').style.display = 'none';
-                                    document.getElementById('loading-recommendations').style.display = 'block';
-                                    document.getElementById('error-message').style.display = 'none';
-                                    
-                                    const formData = new FormData(document.getElementById('recommendation-form'));
-                                    const response = await fetch('/api/recommendations?shop=' + encodeURIComponent(shop), {
-                                        method: 'POST',
-                                        body: formData,
-                                        credentials: 'include'
-                                    });
-                                    
-                                    const data = await response.json();
-                                    
-                                    if (!response.ok) {
-                                        throw new Error(data.error || 'Failed to get recommendations');
-                                    }
-                                    
-                                    const recommendationsHtml = data.recommendations.map(rec => `
-                                        <div class="recommendation">
-                                            <div class="product-image">
-                                                ${rec.product.image_url ? `<img src="${rec.product.image_url}" alt="${rec.product.title}">` : ''}
-                                            </div>
-                                            <div class="product-info">
-                                                <h3>${rec.product.title}</h3>
-                                                <p class="price">$${rec.product.price.toFixed(2)}</p>
-                                                <p class="confidence">Confidence: ${(rec.confidence_score * 100).toFixed(1)}%</p>
-                                                <p class="explanation">${rec.explanation}</p>
-                                                <a href="${rec.product.url}" target="_blank" class="view-product">View Product</a>
-                                            </div>
-                                        </div>
-                                    `).join('');
-                                    
-                                    document.getElementById('recommendations').innerHTML = recommendationsHtml;
-                                    document.getElementById('recommendations').style.display = 'block';
-                                    document.getElementById('loading-recommendations').style.display = 'none';
-                                    
-                                } catch (error) {
-                                    console.error('Error getting recommendations:', error);
-                                    document.getElementById('error-message').textContent = error.message;
-                                    document.getElementById('error-message').classList.add('visible');
-                                    document.getElementById('loading-recommendations').style.display = 'none';
-                                }
-                            }
-                            
-                            // Attach the function to window for the button callback
-                            window.getRecommendations = getRecommendations;
-                        });
-                    </script>
                     <style>
                         body {
                             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+                            line-height: 1.6;
                             margin: 0;
                             padding: 20px;
-                            background-color: #f6f6f7;
+                            background: #f5f5f5;
                         }
-                        .app-container {
+                        .container {
                             max-width: 800px;
                             margin: 0 auto;
-                            background-color: white;
+                            background: white;
                             padding: 20px;
                             border-radius: 8px;
-                            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+                            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
                         }
-                        .error-message {
-                            color: #d82c0d;
-                            display: none;
-                            margin-top: 1em;
-                            padding: 1em;
-                            background-color: #fbeae5;
-                            border-radius: 4px;
+                        h1 {
+                            color: #2c2c2c;
+                            margin-bottom: 20px;
                         }
-                        .error-message.visible {
+                        .form-group {
+                            margin-bottom: 15px;
+                        }
+                        label {
                             display: block;
+                            margin-bottom: 5px;
+                            color: #4a4a4a;
                         }
-                        #app-content {
-                            display: none;
+                        select, input {
+                            width: 100%;
+                            padding: 8px;
+                            border: 1px solid #ddd;
+                            border-radius: 4px;
+                            font-size: 14px;
+                        }
+                        button {
+                            background: #008060;
+                            color: white;
+                            border: none;
+                            padding: 10px 20px;
+                            border-radius: 4px;
+                            cursor: pointer;
+                            font-size: 16px;
+                            width: 100%;
+                        }
+                        button:hover {
+                            background: #006e52;
+                        }
+                        #recommendations {
+                            margin-top: 20px;
                         }
                         .loading {
                             text-align: center;
-                            padding: 2em;
-                            color: #637381;
-                        }
-                        .form-group {
-                            margin-bottom: 1.5em;
-                        }
-                        .form-group label {
-                            display: block;
-                            margin-bottom: 0.5em;
-                            font-weight: 500;
-                            color: #212b36;
-                        }
-                        .form-group input,
-                        .form-group select {
-                            width: 100%;
-                            padding: 0.5em;
-                            border: 1px solid #c4cdd5;
-                            border-radius: 4px;
-                            font-size: 1em;
-                        }
-                        .form-group input:focus,
-                        .form-group select:focus {
-                            outline: none;
-                            border-color: #5c6ac4;
-                            box-shadow: 0 0 0 1px #5c6ac4;
-                        }
-                        .tag-input {
-                            display: flex;
-                            flex-wrap: wrap;
-                            gap: 0.5em;
-                            padding: 0.5em;
-                            border: 1px solid #c4cdd5;
-                            border-radius: 4px;
-                            min-height: 2.5em;
-                        }
-                        .tag {
-                            background-color: #f4f6f8;
-                            border: 1px solid #c4cdd5;
-                            border-radius: 3px;
-                            padding: 0.25em 0.5em;
-                            display: flex;
-                            align-items: center;
-                            gap: 0.5em;
-                        }
-                        .tag button {
-                            border: none;
-                            background: none;
-                            color: #637381;
-                            cursor: pointer;
-                            padding: 0;
-                            font-size: 1.2em;
-                            line-height: 1;
-                        }
-                        #recommendations {
+                            padding: 20px;
                             display: none;
-                            margin-top: 2em;
-                        }
-                        .recommendation {
-                            display: flex;
-                            gap: 1.5em;
-                            padding: 1.5em;
-                            border: 1px solid #e1e3e5;
-                            border-radius: 8px;
-                            margin-bottom: 1em;
-                        }
-                        .product-image {
-                            flex: 0 0 150px;
-                        }
-                        .product-image img {
-                            width: 100%;
-                            height: 150px;
-                            object-fit: cover;
-                            border-radius: 4px;
-                        }
-                        .product-info {
-                            flex: 1;
-                        }
-                        .product-info h3 {
-                            margin: 0 0 0.5em;
-                            color: #212b36;
-                        }
-                        .price {
-                            font-size: 1.2em;
-                            font-weight: 600;
-                            color: #212b36;
-                            margin: 0.5em 0;
-                        }
-                        .confidence {
-                            color: #637381;
-                            margin: 0.5em 0;
-                        }
-                        .explanation {
-                            color: #454f5b;
-                            margin: 0.5em 0;
-                        }
-                        .view-product {
-                            display: inline-block;
-                            padding: 0.5em 1em;
-                            background-color: #5c6ac4;
-                            color: white;
-                            text-decoration: none;
-                            border-radius: 4px;
-                            margin-top: 1em;
-                        }
-                        .view-product:hover {
-                            background-color: #202e78;
-                        }
-                        #loading-recommendations {
-                            display: none;
-                            text-align: center;
-                            padding: 2em;
-                            color: #637381;
                         }
                     </style>
                 </head>
                 <body>
-                    <div class="app-container">
-                        <div id="loading-message" class="loading">
-                            <h2>Smart Product Advisor</h2>
-                            <p>Loading your product recommendations...</p>
-                        </div>
-                        <div id="app-content">
-                            <h1>Smart Product Advisor</h1>
-                            <p>Let's find the perfect products for your customers!</p>
-                            
-                            <form id="recommendation-form">
-                                <div class="form-group">
-                                    <label for="price-range">Price Range</label>
-                                    <select id="price-range" name="price_range">
-                                        <option value="any">Any</option>
-                                        <option value="0-50">$0 - $50</option>
-                                        <option value="50-100">$50 - $100</option>
-                                        <option value="100-200">$100 - $200</option>
-                                        <option value="200+">$200+</option>
-                                    </select>
-                                </div>
-                                
-                                <div class="form-group">
-                                    <label for="category">Category</label>
-                                    <select id="category" name="category">
-                                        <option value="any">Any</option>
-                                        <option value="clothing">Clothing</option>
-                                        <option value="accessories">Accessories</option>
-                                        <option value="electronics">Electronics</option>
-                                        <option value="home">Home & Living</option>
-                                    </select>
-                                </div>
-                                
-                                <div class="form-group">
-                                    <label>Keywords</label>
-                                    <div class="tag-input" id="keywords-container">
-                                        <input type="text" id="keyword-input" placeholder="Type and press Enter" style="border: none; outline: none; flex: 1;">
-                                    </div>
-                                    <input type="hidden" name="keywords" id="keywords-hidden">
-                                </div>
-                            </form>
-                            
-                            <div id="loading-recommendations">
-                                <p>Generating recommendations...</p>
+                    <div class="container">
+                        <h1>Smart Product Advisor</h1>
+                        <form id="recommendationForm">
+                            <div class="form-group">
+                                <label for="price_range">Price Range</label>
+                                <select id="price_range" name="price_range" required>
+                                    <option value="any">Any</option>
+                                    <option value="0-50">Under $50</option>
+                                    <option value="50-100">$50 - $100</option>
+                                    <option value="100-200">$100 - $200</option>
+                                    <option value="200+">$200+</option>
+                                </select>
                             </div>
-                            
-                            <div id="recommendations"></div>
-                        </div>
-                        <p id="error-message" class="error-message"></p>
+                            <div class="form-group">
+                                <label for="category">Category</label>
+                                <select id="category" name="category" required>
+                                    <option value="any">Any</option>
+                                    <option value="clothing">Clothing</option>
+                                    <option value="accessories">Accessories</option>
+                                    <option value="electronics">Electronics</option>
+                                    <option value="home">Home & Garden</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="keywords">Keywords (comma-separated)</label>
+                                <input type="text" id="keywords" name="keywords" placeholder="e.g., comfortable, durable, modern">
+                            </div>
+                            <button type="submit">Get Recommendations</button>
+                        </form>
+                        <div id="loading" class="loading">Loading recommendations...</div>
+                        <div id="recommendations"></div>
                     </div>
-                    
                     <script>
-                        // Handle keywords input
-                        const keywordsContainer = document.getElementById('keywords-container');
-                        const keywordInput = document.getElementById('keyword-input');
-                        const keywordsHidden = document.getElementById('keywords-hidden');
-                        const keywords = new Set();
-                        
-                        function updateKeywordsHidden() {
-                            keywordsHidden.value = Array.from(keywords).join(',');
-                        }
-                        
-                        function addKeyword(keyword) {
-                            if (keyword && !keywords.has(keyword)) {
-                                keywords.add(keyword);
-                                const tag = document.createElement('div');
-                                tag.className = 'tag';
-                                tag.innerHTML = `
-                                    ${keyword}
-                                    <button type="button" onclick="removeKeyword('${keyword}')">×</button>
+                        document.getElementById('recommendationForm').addEventListener('submit', async (e) => {
+                            e.preventDefault();
+                            
+                            const form = e.target;
+                            const loading = document.getElementById('loading');
+                            const recommendationsDiv = document.getElementById('recommendations');
+                            
+                            // Show loading
+                            loading.style.display = 'block';
+                            recommendationsDiv.innerHTML = '';
+                            
+                            try {
+                                const response = await fetch('/api/recommendations?shop={{ shop }}', {
+                                    method: 'POST',
+                                    headers: {
+                                        'Content-Type': 'application/json'
+                                    },
+                                    body: JSON.stringify({
+                                        price_range: form.price_range.value,
+                                        category: form.category.value,
+                                        keywords: form.keywords.value.split(',').map(k => k.trim()).filter(k => k)
+                                    })
+                                });
+                                
+                                if (!response.ok) {
+                                    throw new Error('Failed to get recommendations');
+                                }
+                                
+                                const data = await response.json();
+                                
+                                if (data.success && data.recommendations) {
+                                    recommendationsDiv.innerHTML = `
+                                        <h2>Recommended Products</h2>
+                                        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 20px;">
+                                            ${data.recommendations.map(rec => `
+                                                <div style="border: 1px solid #ddd; padding: 15px; border-radius: 8px;">
+                                                    ${rec.product.image_url ? 
+                                                        `<img src="${rec.product.image_url}" alt="${rec.product.title}" style="width: 100%; height: 200px; object-fit: cover; border-radius: 4px;">` 
+                                                        : ''
+                                                    }
+                                                    <h3 style="margin: 10px 0;">${rec.product.title}</h3>
+                                                    <p style="color: #2c2c2c; font-weight: bold;">$${rec.product.price}</p>
+                                                    <p style="font-size: 14px; color: #666;">${rec.explanation}</p>
+                                                    <div style="background: #f0f0f0; border-radius: 10px; margin: 10px 0;">
+                                                        <div style="background: #008060; width: ${rec.confidence_score * 100}%; height: 10px; border-radius: 10px;"></div>
+                                                    </div>
+                                                    <p style="text-align: center; font-size: 12px; color: #666;">${Math.round(rec.confidence_score * 100)}% match</p>
+                                                    <a href="${rec.product.url}" target="_blank" style="display: block; text-align: center; background: #008060; color: white; padding: 8px; border-radius: 4px; text-decoration: none;">View Product</a>
+                                                </div>
+                                            `).join('')}
+                                        </div>
+                                    `;
+                                } else {
+                                    throw new Error('No recommendations found');
+                                }
+                            } catch (error) {
+                                recommendationsDiv.innerHTML = `
+                                    <div style="text-align: center; padding: 20px; color: #666;">
+                                        <p>Sorry, we couldn't get recommendations at this time.</p>
+                                        <p>Please try again with different preferences.</p>
+                                    </div>
                                 `;
-                                keywordsContainer.insertBefore(tag, keywordInput);
-                                updateKeywordsHidden();
-                            }
-                        }
-                        
-                        function removeKeyword(keyword) {
-                            keywords.delete(keyword);
-                            const tags = keywordsContainer.getElementsByClassName('tag');
-                            for (let tag of tags) {
-                                if (tag.textContent.trim().replace('×', '') === keyword) {
-                                    tag.remove();
-                                    break;
-                                }
-                            }
-                            updateKeywordsHidden();
-                        }
-                        
-                        keywordInput.addEventListener('keydown', function(e) {
-                            if (e.key === 'Enter') {
-                                e.preventDefault();
-                                const keyword = this.value.trim();
-                                if (keyword) {
-                                    addKeyword(keyword);
-                                    this.value = '';
-                                }
+                            } finally {
+                                loading.style.display = 'none';
                             }
                         });
                     </script>
                 </body>
             </html>
-        """, api_key=SHOPIFY_API_KEY, host=host, shop=shop))
-        
-        # Set security headers
-        response.headers.update({
-            'Content-Security-Policy': (
-                "frame-ancestors https://*.myshopify.com "
-                "https://admin.shopify.com "
-                "https://*.shopify.com "
-                "https://partners.shopify.com"
-            ),
-            'Content-Type': 'text/html; charset=utf-8'
-        })
-        
-        return response
+        """, shop=shop)
         
     except Exception as e:
         logger.error(f"App page error: {str(e)}")
