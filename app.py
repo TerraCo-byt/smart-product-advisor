@@ -397,6 +397,12 @@ def get_product_recommendations(products, preferences):
     try:
         logger.info(f"Generating recommendations for preferences: {preferences}")
         
+        # Check for Hugging Face API token
+        huggingface_token = os.environ.get('HUGGINGFACE_API_TOKEN')
+        if not huggingface_token:
+            logger.error("Missing HUGGINGFACE_API_TOKEN environment variable")
+            raise Exception("Hugging Face API token not configured")
+        
         # Prepare product context
         product_context = "\n".join([
             f"Product {i+1}:"
@@ -408,12 +414,16 @@ def get_product_recommendations(products, preferences):
             for i, p in enumerate(products)
         ])
         
+        logger.info("Prepared product context")
+        
         # Prepare user preferences
         user_prefs = (
             f"Price Range: {preferences.get('price_range', 'Any')}\n"
             f"Category: {preferences.get('category', 'Any')}\n"
             f"Keywords: {', '.join(preferences.get('keywords', []))}"
         )
+        
+        logger.info("Prepared user preferences")
         
         # Construct the prompt
         system_prompt = """You are a smart product recommendation system. Based on the available products and user preferences, recommend the most suitable products. For each recommendation:
@@ -437,9 +447,11 @@ User Preferences:
 
 Provide the best product recommendations as a JSON array."""
 
+        logger.info("Constructed prompts")
+
         # Make request to Hugging Face
         headers = {
-            "Authorization": f"Bearer {os.environ.get('HUGGINGFACE_API_TOKEN')}",
+            "Authorization": f"Bearer {huggingface_token}",
             "Content-Type": "application/json"
         }
         
@@ -452,49 +464,69 @@ Provide the best product recommendations as a JSON array."""
             }
         }
         
-        response = requests.post(
-            "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2",
-            headers=headers,
-            json=payload,
-            timeout=30
-        )
+        logger.info("Making request to Hugging Face API...")
         
-        if response.status_code != 200:
-            raise Exception(f"Hugging Face API error: {response.text}")
+        try:
+            response = requests.post(
+                "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2",
+                headers=headers,
+                json=payload,
+                timeout=30
+            )
             
-        # Parse recommendations
-        recommendations_text = response.json()[0]["generated_text"]
-        json_str = recommendations_text.strip()
-        if "```json" in json_str:
-            json_str = json_str.split("```json")[1].split("```")[0]
-        elif "```" in json_str:
-            json_str = json_str.split("```")[1]
+            logger.info(f"Hugging Face API response status: {response.status_code}")
             
-        recommendations = json.loads(json_str)
-        
-        # Format recommendations
-        formatted_recommendations = []
-        for rec in recommendations:
-            product_idx = rec['product_index'] - 1
-            if 0 <= product_idx < len(products):
-                product = products[product_idx]
-                formatted_rec = {
-                    'product': {
-                        'title': product.title,
-                        'price': float(product.variants[0].price),
-                        'image_url': product.images[0].src if product.images else None,
-                        'url': f"https://{request.headers.get('X-Shop-Domain')}/products/{product.handle}"
-                    },
-                    'confidence_score': float(rec['confidence_score']),
-                    'explanation': rec['explanation']
-                }
-                formatted_recommendations.append(formatted_rec)
+            if response.status_code != 200:
+                logger.error(f"Hugging Face API error response: {response.text}")
+                raise Exception(f"Hugging Face API error: {response.text}")
                 
-        return formatted_recommendations
+            # Parse recommendations
+            response_data = response.json()
+            logger.info(f"Received response from Hugging Face: {response_data}")
+            
+            recommendations_text = response_data[0]["generated_text"]
+            json_str = recommendations_text.strip()
+            if "```json" in json_str:
+                json_str = json_str.split("```json")[1].split("```")[0]
+            elif "```" in json_str:
+                json_str = json_str.split("```")[1]
+                
+            logger.info(f"Extracted JSON string: {json_str}")
+            
+            recommendations = json.loads(json_str)
+            logger.info(f"Parsed recommendations: {recommendations}")
+            
+            # Format recommendations
+            formatted_recommendations = []
+            for rec in recommendations:
+                product_idx = rec['product_index'] - 1
+                if 0 <= product_idx < len(products):
+                    product = products[product_idx]
+                    formatted_rec = {
+                        'product': {
+                            'title': product.title,
+                            'price': float(product.variants[0].price),
+                            'image_url': product.images[0].src if product.images else None,
+                            'url': f"https://{request.headers.get('X-Shop-Domain')}/products/{product.handle}"
+                        },
+                        'confidence_score': float(rec['confidence_score']),
+                        'explanation': rec['explanation']
+                    }
+                    formatted_recommendations.append(formatted_rec)
+                    
+            logger.info(f"Formatted {len(formatted_recommendations)} recommendations")
+            return formatted_recommendations
+            
+        except requests.exceptions.Timeout:
+            logger.error("Hugging Face API request timed out")
+            raise Exception("Recommendation service timed out")
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Hugging Face API request failed: {str(e)}")
+            raise Exception("Failed to connect to recommendation service")
         
     except Exception as e:
         logger.error(f"Error generating recommendations: {str(e)}")
-        logger.error(traceback.format_exc())
+        logger.error("Full error details:", exc_info=True)
         raise
 
 @app.route('/api/recommendations', methods=['POST'])
@@ -502,11 +534,18 @@ def recommendations():
     """Handle recommendation requests"""
     try:
         shop = request.args.get('shop') or request.headers.get('X-Shop-Domain')
+        logger.info(f"Shop from request: {shop}")
+        logger.info(f"Headers: {dict(request.headers)}")
+        logger.info(f"Session data: {dict(session)}")
+        
         if not shop:
+            logger.error("Missing shop parameter")
             return jsonify({"error": "Missing shop parameter"}), 400
             
         # Check session
         if session.get('shop') != shop or not session.get('access_token'):
+            logger.error(f"Session validation failed. Session shop: {session.get('shop')}, Request shop: {shop}")
+            logger.error(f"Access token present: {bool(session.get('access_token'))}")
             return jsonify({
                 "error": "Authentication required",
                 "redirect_url": f"/install?shop={shop}"
@@ -514,35 +553,46 @@ def recommendations():
             
         # Get form data
         data = request.get_json() or request.form.to_dict()
+        logger.info(f"Received data: {data}")
+        
         preferences = {
             'price_range': data.get('price_range', 'any'),
             'category': data.get('category', 'any'),
             'keywords': data.get('keywords', '').split(',') if data.get('keywords') else []
         }
         
-        logger.info(f"Received recommendation request for shop {shop}")
-        logger.info(f"Preferences: {preferences}")
+        logger.info(f"Processed preferences: {preferences}")
         
         # Setup Shopify session
         shopify.Session.setup(api_key=SHOPIFY_API_KEY, secret=SHOPIFY_API_SECRET)
         shopify_session = shopify.Session(shop, API_VERSION)
         shopify_session.token = session.get('access_token')
+        logger.info(f"Created Shopify session for shop: {shop}")
+        
         shopify.ShopifyResource.activate_session(shopify_session)
+        logger.info("Activated Shopify session")
         
         try:
             # Get products
+            logger.info("Fetching products...")
             products = shopify.Product.find(limit=20)
+            logger.info(f"Found {len(products) if products else 0} products")
+            
             if not products:
+                logger.error("No products found in shop")
                 return jsonify({
                     "error": "No products found in shop"
                 }), 404
                 
             # Generate recommendations
+            logger.info("Generating recommendations...")
             recommendations = get_product_recommendations(products, preferences)
+            logger.info(f"Generated {len(recommendations)} recommendations")
             
             # Sort by confidence score
             recommendations.sort(key=lambda x: x['confidence_score'], reverse=True)
             recommendations = recommendations[:6]  # Limit to top 6
+            logger.info("Sorted and limited recommendations")
             
             return jsonify({
                 "success": True,
@@ -550,11 +600,13 @@ def recommendations():
             })
             
         finally:
+            logger.info("Clearing Shopify session")
             shopify.ShopifyResource.clear_session()
             
     except Exception as e:
         logger.error(f"Error getting recommendations: {str(e)}")
-        logger.error(traceback.format_exc())
+        logger.error("Full error details:", exc_info=True)
+        logger.error(f"Request data: {request.get_data()}")
         return jsonify({
             "error": "Failed to get recommendations",
             "details": str(e)
