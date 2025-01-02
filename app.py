@@ -211,16 +211,31 @@ def app_page():
                     <meta charset="utf-8">
                     <meta name="viewport" content="width=device-width, initial-scale=1">
                     <script src="https://unpkg.com/@shopify/app-bridge@3"></script>
+                    <script src="https://unpkg.com/@shopify/app-bridge-utils@3"></script>
                     <script>
-                        document.addEventListener('DOMContentLoaded', function() {
+                        window.addEventListener('load', function() {
+                            const host = '{{ host }}';
+                            if (!host) {
+                                console.error('Missing host parameter');
+                                return;
+                            }
+                            
                             const config = {
                                 apiKey: '{{ api_key }}',
-                                host: '{{ host }}',
+                                host: host,
                                 forceRedirect: true
                             };
                             
                             try {
-                                window.app = window.shopify.createApp(config);
+                                const AppBridge = window['app-bridge'];
+                                const app = AppBridge.createApp(config);
+                                const actions = AppBridge.actions;
+                                
+                                // Create the title bar
+                                const TitleBar = actions.TitleBar;
+                                TitleBar.create(app, {
+                                    title: 'Smart Product Advisor'
+                                });
                             } catch (error) {
                                 console.error('Error initializing app:', error);
                             }
@@ -228,7 +243,10 @@ def app_page():
                     </script>
                 </head>
                 <body>
-                    <div id="app">Loading Smart Product Advisor...</div>
+                    <div id="app">
+                        <h1>Smart Product Advisor</h1>
+                        <p>Loading your product recommendations...</p>
+                    </div>
                 </body>
             </html>
         """, api_key=SHOPIFY_API_KEY, host=host))
@@ -240,7 +258,8 @@ def app_page():
                 "https://admin.shopify.com "
                 "https://*.shopify.com "
                 "https://partners.shopify.com"
-            )
+            ),
+            'Content-Type': 'text/html; charset=utf-8'
         })
         
         return response
