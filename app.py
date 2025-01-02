@@ -29,24 +29,37 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 app.secret_key = os.environ.get('FLASK_SECRET_KEY', os.urandom(32))
 
-# Basic configuration
-SHOPIFY_API_KEY = os.environ.get('SHOPIFY_API_KEY')
-SHOPIFY_API_SECRET = os.environ.get('SHOPIFY_API_SECRET')
-APP_URL = os.environ.get('RENDER_EXTERNAL_URL', os.environ.get('APP_URL', 'http://localhost:8000'))
-API_VERSION = '2023-04'
-
 # Configure session
 app.config.update(
     SESSION_TYPE='filesystem',
     SESSION_FILE_DIR='/tmp/flask_session',
-    PERMANENT_SESSION_LIFETIME=datetime.timedelta(days=1)
+    PERMANENT_SESSION_LIFETIME=datetime.timedelta(days=1),
+    SESSION_COOKIE_SECURE=True,
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='None'
 )
 
 # Initialize Flask-Session
 Session(app)
 
-# Allow CORS
-CORS(app, supports_credentials=True)
+# Allow CORS with credentials
+CORS(app, 
+     supports_credentials=True,
+     resources={
+         r"/*": {
+             "origins": "*",
+             "methods": ["GET", "POST", "OPTIONS"],
+             "allow_headers": ["Content-Type", "Authorization"],
+             "expose_headers": ["Content-Range", "X-Content-Range"],
+             "supports_credentials": True
+         }
+     })
+
+# Basic configuration
+SHOPIFY_API_KEY = os.environ.get('SHOPIFY_API_KEY')
+SHOPIFY_API_SECRET = os.environ.get('SHOPIFY_API_SECRET')
+APP_URL = os.environ.get('RENDER_EXTERNAL_URL', os.environ.get('APP_URL', 'http://localhost:8000'))
+API_VERSION = '2023-04'
 
 # Define scopes
 SCOPES = ['read_products', 'write_products', 'read_themes', 'write_themes']
@@ -622,13 +635,20 @@ def recommendations():
         shop = request.args.get('shop')
         logger.info(f"Shop from request: {shop}")
         logger.info(f"Headers: {dict(request.headers)}")
-        logger.info(f"Session data: {dict(session)}")
+        logger.info(f"Session data: {dict(session) if session else 'No session'}")
         logger.info(f"Cookies: {request.cookies}")
-        logger.info(f"Request data: {request.get_data()}")
+        
+        # Get request data
+        raw_data = request.get_data()
+        logger.info(f"Raw request data: {raw_data}")
         
         if not shop:
             logger.error("Missing shop parameter")
             return jsonify({"error": "Missing shop parameter"}), 400
+            
+        # Initialize session if needed
+        if 'session' not in g:
+            Session(app)
             
         # Check session
         access_token = session.get('access_token')
@@ -649,14 +669,30 @@ def recommendations():
                 "redirect_url": f"/install?shop={shop}"
             }), 401
             
-        # Get form data
+        # Parse request data
         try:
-            data = request.get_json()
-            logger.info(f"Parsed JSON data: {data}")
-        except Exception as e:
+            if raw_data:
+                if isinstance(raw_data, bytes):
+                    data = json.loads(raw_data.decode('utf-8'))
+                else:
+                    data = json.loads(raw_data)
+            else:
+                data = request.form.to_dict()
+                
+            logger.info(f"Parsed request data: {data}")
+            
+        except json.JSONDecodeError as e:
             logger.error(f"Failed to parse JSON data: {str(e)}")
-            data = request.form.to_dict()
-            logger.info(f"Using form data instead: {data}")
+            return jsonify({
+                "error": "Invalid JSON data",
+                "details": str(e)
+            }), 400
+        except Exception as e:
+            logger.error(f"Error processing request data: {str(e)}")
+            return jsonify({
+                "error": "Failed to process request data",
+                "details": str(e)
+            }), 400
         
         if not data:
             logger.error("No data received in request")
@@ -664,13 +700,26 @@ def recommendations():
                 "error": "No data received in request"
             }), 400
         
-        preferences = {
-            'price_range': data.get('price_range', 'any'),
-            'category': data.get('category', 'any'),
-            'keywords': data.get('keywords', '').split(',') if data.get('keywords') else []
-        }
-        
-        logger.info(f"Processed preferences: {preferences}")
+        # Process preferences
+        try:
+            keywords = data.get('keywords', '')
+            if isinstance(keywords, list):
+                keywords = ','.join(keywords)
+                
+            preferences = {
+                'price_range': data.get('price_range', 'any'),
+                'category': data.get('category', 'any'),
+                'keywords': keywords.split(',') if keywords else []
+            }
+            
+            logger.info(f"Processed preferences: {preferences}")
+            
+        except Exception as e:
+            logger.error(f"Error processing preferences: {str(e)}")
+            return jsonify({
+                "error": "Failed to process preferences",
+                "details": str(e)
+            }), 400
         
         # Setup Shopify session
         try:
