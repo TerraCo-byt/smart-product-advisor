@@ -47,11 +47,25 @@ CORS(app,
      supports_credentials=True,
      resources={
          r"/*": {
-             "origins": "*",
+             "origins": [
+                 "https://admin.shopify.com",
+                 "https://*.myshopify.com",
+                 "https://*.onrender.com",
+                 "http://localhost:8000"
+             ],
              "methods": ["GET", "POST", "OPTIONS"],
-             "allow_headers": ["Content-Type", "Authorization"],
-             "expose_headers": ["Content-Range", "X-Content-Range"],
-             "supports_credentials": True
+             "allow_headers": [
+                 "Content-Type",
+                 "Authorization",
+                 "X-Shop-Domain",
+                 "X-Shopify-Access-Token"
+             ],
+             "expose_headers": [
+                 "Content-Range",
+                 "X-Content-Range"
+             ],
+             "supports_credentials": True,
+             "vary": "Origin"
          }
      })
 
@@ -632,84 +646,50 @@ Provide the best product recommendations as a JSON array."""
 def recommendations():
     """Handle recommendation requests"""
     try:
+        # Get shop parameter
         shop = request.args.get('shop')
-        logger.info(f"Shop from request: {shop}")
-        logger.info(f"Headers: {dict(request.headers)}")
-        logger.info(f"Session data: {dict(session) if session else 'No session'}")
-        logger.info(f"Cookies: {request.cookies}")
-        
-        # Get request data
-        raw_data = request.get_data()
-        logger.info(f"Raw request data: {raw_data}")
-        
+        if not shop:
+            shop = request.headers.get('X-Shop-Domain')
         if not shop:
             logger.error("Missing shop parameter")
             return jsonify({"error": "Missing shop parameter"}), 400
             
-        # Initialize session if needed
-        if 'session' not in g:
-            Session(app)
-            
-        # Check session
-        access_token = session.get('access_token')
-        session_shop = session.get('shop')
-        logger.info(f"Session shop: {session_shop}, Access token: {bool(access_token)}")
+        logger.info(f"Processing request for shop: {shop}")
+        logger.info(f"Headers: {dict(request.headers)}")
         
-        if not access_token or not session_shop:
-            logger.error("No session found")
-            return jsonify({
-                "error": "No session found",
-                "redirect_url": f"/install?shop={shop}"
-            }), 401
-            
-        if session_shop != shop:
-            logger.error(f"Session shop ({session_shop}) doesn't match request shop ({shop})")
-            return jsonify({
-                "error": "Invalid shop",
-                "redirect_url": f"/install?shop={shop}"
-            }), 401
-            
-        # Parse request data
+        # Get request data
         try:
-            if raw_data:
-                if isinstance(raw_data, bytes):
-                    data = json.loads(raw_data.decode('utf-8'))
-                else:
-                    data = json.loads(raw_data)
+            if request.is_json:
+                data = request.get_json()
             else:
                 data = request.form.to_dict()
                 
-            logger.info(f"Parsed request data: {data}")
+            logger.info(f"Request data: {data}")
             
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse JSON data: {str(e)}")
-            return jsonify({
-                "error": "Invalid JSON data",
-                "details": str(e)
-            }), 400
+            if not data:
+                data = json.loads(request.get_data().decode('utf-8'))
+                
         except Exception as e:
-            logger.error(f"Error processing request data: {str(e)}")
+            logger.error(f"Error parsing request data: {str(e)}")
             return jsonify({
-                "error": "Failed to process request data",
+                "error": "Invalid request data",
                 "details": str(e)
             }), 400
-        
-        if not data:
-            logger.error("No data received in request")
-            return jsonify({
-                "error": "No data received in request"
-            }), 400
-        
+            
         # Process preferences
         try:
             keywords = data.get('keywords', '')
-            if isinstance(keywords, list):
-                keywords = ','.join(keywords)
+            if isinstance(keywords, str):
+                keywords = [k.strip() for k in keywords.split(',') if k.strip()]
+            elif isinstance(keywords, list):
+                keywords = [k.strip() for k in keywords if k.strip()]
+            else:
+                keywords = []
                 
             preferences = {
                 'price_range': data.get('price_range', 'any'),
                 'category': data.get('category', 'any'),
-                'keywords': keywords.split(',') if keywords else []
+                'keywords': keywords
             }
             
             logger.info(f"Processed preferences: {preferences}")
@@ -720,71 +700,86 @@ def recommendations():
                 "error": "Failed to process preferences",
                 "details": str(e)
             }), 400
-        
+            
         # Setup Shopify session
         try:
             shopify.Session.setup(api_key=SHOPIFY_API_KEY, secret=SHOPIFY_API_SECRET)
             shopify_session = shopify.Session(shop, API_VERSION)
-            shopify_session.token = access_token
-            logger.info(f"Created Shopify session for shop: {shop}")
             
+            # Try to get access token from session or request
+            access_token = None
+            if session and 'access_token' in session:
+                access_token = session.get('access_token')
+                logger.info("Got access token from session")
+            
+            if not access_token:
+                logger.error("No access token found")
+                return jsonify({
+                    "error": "Authentication required",
+                    "redirect_url": f"/install?shop={shop}"
+                }), 401
+                
+            shopify_session.token = access_token
             shopify.ShopifyResource.activate_session(shopify_session)
             logger.info("Activated Shopify session")
+            
         except Exception as e:
             logger.error(f"Failed to setup Shopify session: {str(e)}")
             return jsonify({
                 "error": "Failed to setup Shopify session",
                 "details": str(e)
             }), 500
-        
+            
         try:
             # Get products
             logger.info("Fetching products...")
             products = shopify.Product.find(limit=20)
-            product_count = len(products) if products else 0
-            logger.info(f"Found {product_count} products")
             
             if not products:
                 logger.error("No products found in shop")
                 return jsonify({
                     "error": "No products found in shop"
                 }), 404
-            
-            # Log some product details for debugging
-            for i, product in enumerate(products[:3]):  # Log first 3 products
-                logger.info(f"Product {i+1}:")
-                logger.info(f"  Title: {product.title}")
-                logger.info(f"  Type: {product.product_type}")
-                logger.info(f"  Price: ${product.variants[0].price}")
-                logger.info(f"  Tags: {', '.join(product.tags)}")
                 
+            product_count = len(products)
+            logger.info(f"Found {product_count} products")
+            
             # Generate recommendations
             logger.info("Generating recommendations...")
             recommendations = get_product_recommendations(products, preferences)
+            
+            if not recommendations:
+                logger.error("No recommendations generated")
+                return jsonify({
+                    "error": "No recommendations could be generated"
+                }), 404
+                
             logger.info(f"Generated {len(recommendations)} recommendations")
             
-            # Sort by confidence score
+            # Sort and limit recommendations
             recommendations.sort(key=lambda x: x['confidence_score'], reverse=True)
-            recommendations = recommendations[:6]  # Limit to top 6
-            logger.info("Sorted and limited recommendations")
+            recommendations = recommendations[:6]
             
-            response = jsonify({
+            # Prepare response
+            response_data = {
                 "success": True,
                 "recommendations": recommendations
-            })
+            }
             
-            # Set CORS headers
+            # Create response with CORS headers
+            response = make_response(jsonify(response_data))
             response.headers.update({
-                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Origin': request.headers.get('Origin', '*'),
                 'Access-Control-Allow-Methods': 'POST, OPTIONS',
                 'Access-Control-Allow-Headers': 'Content-Type',
-                'Access-Control-Allow-Credentials': 'true'
+                'Access-Control-Allow-Credentials': 'true',
+                'Vary': 'Origin'
             })
             
             return response
             
         except Exception as e:
-            logger.error(f"Error in recommendation generation: {str(e)}")
+            logger.error(f"Error generating recommendations: {str(e)}")
             logger.error("Full error details:", exc_info=True)
             return jsonify({
                 "error": "Failed to generate recommendations",
@@ -792,38 +787,79 @@ def recommendations():
             }), 500
             
         finally:
-            logger.info("Clearing Shopify session")
-            shopify.ShopifyResource.clear_session()
-            
+            try:
+                shopify.ShopifyResource.clear_session()
+                logger.info("Cleared Shopify session")
+            except Exception as e:
+                logger.error(f"Error clearing session: {str(e)}")
+                
     except Exception as e:
         logger.error(f"Error in recommendations endpoint: {str(e)}")
         logger.error("Full error details:", exc_info=True)
-        logger.error(f"Request data: {request.get_data()}")
         return jsonify({
-            "error": "Failed to process recommendation request",
+            "error": "Internal server error",
             "details": str(e)
         }), 500
 
 @app.after_request
 def after_request(response):
     """Add CORS headers to all responses"""
+    origin = request.headers.get('Origin')
+    if origin:
+        # Check if origin is allowed
+        allowed_origins = [
+            "https://admin.shopify.com",
+            "https://*.myshopify.com",
+            "https://*.onrender.com",
+            "http://localhost:8000"
+        ]
+        
+        # Check if origin matches any allowed pattern
+        is_allowed = any(
+            origin.endswith(allowed.replace('*', '')) 
+            for allowed in allowed_origins
+        )
+        
+        if is_allowed:
+            response.headers['Access-Control-Allow-Origin'] = origin
+            response.headers['Access-Control-Allow-Credentials'] = 'true'
+            response.headers['Vary'] = 'Origin'
+    
     response.headers.update({
-        'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type',
-        'Access-Control-Allow-Credentials': 'true'
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Shop-Domain, X-Shopify-Access-Token'
     })
     return response
 
 @app.route('/api/recommendations', methods=['OPTIONS'])
 def recommendations_options():
     """Handle CORS preflight requests"""
+    origin = request.headers.get('Origin')
     response = make_response()
+    
+    if origin:
+        # Check if origin is allowed
+        allowed_origins = [
+            "https://admin.shopify.com",
+            "https://*.myshopify.com",
+            "https://*.onrender.com",
+            "http://localhost:8000"
+        ]
+        
+        # Check if origin matches any allowed pattern
+        is_allowed = any(
+            origin.endswith(allowed.replace('*', '')) 
+            for allowed in allowed_origins
+        )
+        
+        if is_allowed:
+            response.headers['Access-Control-Allow-Origin'] = origin
+            response.headers['Access-Control-Allow-Credentials'] = 'true'
+            response.headers['Vary'] = 'Origin'
+    
     response.headers.update({
-        'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Methods': 'POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type',
-        'Access-Control-Allow-Credentials': 'true'
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Shop-Domain, X-Shopify-Access-Token'
     })
     return response
 
