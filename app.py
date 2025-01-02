@@ -272,7 +272,7 @@ def app_page():
                                         primary: {
                                             label: 'Get Recommendations',
                                             callback: () => {
-                                                console.log('Getting recommendations...');
+                                                document.getElementById('recommendation-form').submit();
                                             }
                                         }
                                     }
@@ -324,6 +324,56 @@ def app_page():
                             padding: 2em;
                             color: #637381;
                         }
+                        .form-group {
+                            margin-bottom: 1.5em;
+                        }
+                        .form-group label {
+                            display: block;
+                            margin-bottom: 0.5em;
+                            font-weight: 500;
+                            color: #212b36;
+                        }
+                        .form-group input,
+                        .form-group select {
+                            width: 100%;
+                            padding: 0.5em;
+                            border: 1px solid #c4cdd5;
+                            border-radius: 4px;
+                            font-size: 1em;
+                        }
+                        .form-group input:focus,
+                        .form-group select:focus {
+                            outline: none;
+                            border-color: #5c6ac4;
+                            box-shadow: 0 0 0 1px #5c6ac4;
+                        }
+                        .tag-input {
+                            display: flex;
+                            flex-wrap: wrap;
+                            gap: 0.5em;
+                            padding: 0.5em;
+                            border: 1px solid #c4cdd5;
+                            border-radius: 4px;
+                            min-height: 2.5em;
+                        }
+                        .tag {
+                            background-color: #f4f6f8;
+                            border: 1px solid #c4cdd5;
+                            border-radius: 3px;
+                            padding: 0.25em 0.5em;
+                            display: flex;
+                            align-items: center;
+                            gap: 0.5em;
+                        }
+                        .tag button {
+                            border: none;
+                            background: none;
+                            color: #637381;
+                            cursor: pointer;
+                            padding: 0;
+                            font-size: 1.2em;
+                            line-height: 1;
+                        }
                     </style>
                 </head>
                 <body>
@@ -334,10 +384,91 @@ def app_page():
                         </div>
                         <div id="app-content">
                             <h1>Smart Product Advisor</h1>
-                            <p>Ready to help you find the perfect products for your customers!</p>
+                            <p>Let's find the perfect products for your customers!</p>
+                            
+                            <form id="recommendation-form" action="/api/recommendations" method="POST">
+                                <div class="form-group">
+                                    <label for="price-range">Price Range</label>
+                                    <select id="price-range" name="price_range">
+                                        <option value="any">Any</option>
+                                        <option value="0-50">$0 - $50</option>
+                                        <option value="50-100">$50 - $100</option>
+                                        <option value="100-200">$100 - $200</option>
+                                        <option value="200+">$200+</option>
+                                    </select>
+                                </div>
+                                
+                                <div class="form-group">
+                                    <label for="category">Category</label>
+                                    <select id="category" name="category">
+                                        <option value="any">Any</option>
+                                        <option value="clothing">Clothing</option>
+                                        <option value="accessories">Accessories</option>
+                                        <option value="electronics">Electronics</option>
+                                        <option value="home">Home & Living</option>
+                                    </select>
+                                </div>
+                                
+                                <div class="form-group">
+                                    <label>Keywords</label>
+                                    <div class="tag-input" id="keywords-container">
+                                        <input type="text" id="keyword-input" placeholder="Type and press Enter" style="border: none; outline: none; flex: 1;">
+                                    </div>
+                                    <input type="hidden" name="keywords" id="keywords-hidden">
+                                </div>
+                            </form>
                         </div>
                         <p id="error-message" class="error-message"></p>
                     </div>
+                    
+                    <script>
+                        // Handle keywords input
+                        const keywordsContainer = document.getElementById('keywords-container');
+                        const keywordInput = document.getElementById('keyword-input');
+                        const keywordsHidden = document.getElementById('keywords-hidden');
+                        const keywords = new Set();
+                        
+                        function updateKeywordsHidden() {
+                            keywordsHidden.value = Array.from(keywords).join(',');
+                        }
+                        
+                        function addKeyword(keyword) {
+                            if (keyword && !keywords.has(keyword)) {
+                                keywords.add(keyword);
+                                const tag = document.createElement('div');
+                                tag.className = 'tag';
+                                tag.innerHTML = `
+                                    ${keyword}
+                                    <button type="button" onclick="removeKeyword('${keyword}')">×</button>
+                                `;
+                                keywordsContainer.insertBefore(tag, keywordInput);
+                                updateKeywordsHidden();
+                            }
+                        }
+                        
+                        function removeKeyword(keyword) {
+                            keywords.delete(keyword);
+                            const tags = keywordsContainer.getElementsByClassName('tag');
+                            for (let tag of tags) {
+                                if (tag.textContent.trim().replace('×', '') === keyword) {
+                                    tag.remove();
+                                    break;
+                                }
+                            }
+                            updateKeywordsHidden();
+                        }
+                        
+                        keywordInput.addEventListener('keydown', function(e) {
+                            if (e.key === 'Enter') {
+                                e.preventDefault();
+                                const keyword = this.value.trim();
+                                if (keyword) {
+                                    addKeyword(keyword);
+                                    this.value = '';
+                                }
+                            }
+                        });
+                    </script>
                 </body>
             </html>
         """, api_key=SHOPIFY_API_KEY, host=host, shop=shop))
