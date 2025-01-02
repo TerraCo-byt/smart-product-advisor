@@ -31,7 +31,7 @@ app.secret_key = os.environ.get('FLASK_SECRET_KEY', os.urandom(32))
 SHOPIFY_API_KEY = os.environ.get('SHOPIFY_API_KEY')
 SHOPIFY_API_SECRET = os.environ.get('SHOPIFY_API_SECRET')
 APP_URL = os.environ.get('RENDER_EXTERNAL_URL', os.environ.get('APP_URL', 'http://localhost:8000'))
-API_VERSION = '2023-10'
+API_VERSION = '2023-04'
 
 # Configure session
 app.config.update(
@@ -55,6 +55,7 @@ def initialize_shopify():
             logger.error(f"Invalid API version: {API_VERSION}. Available versions: {versions}")
             return False
         logger.info(f"Shopify initialized with API version: {API_VERSION}")
+        logger.info(f"Available versions: {versions}")
         return True
     except Exception as e:
         logger.error(f"Failed to initialize Shopify: {str(e)}")
