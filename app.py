@@ -159,15 +159,20 @@ def callback():
     """Handle OAuth callback from Shopify"""
     try:
         shop = request.args.get('shop')
+        host = request.args.get('host', '')
+        embedded = request.args.get('embedded', '1')
         
         if not shop:
             return jsonify({"error": "Missing shop parameter"}), 400
+            
+        logger.info(f"Auth callback received for shop: {shop}")
+        logger.info(f"Host parameter: {host}")
             
         # Verify state
         state = request.args.get('state')
         stored_state = session.get('state')
         if not state or not stored_state or state != stored_state:
-            return redirect(f"/install?shop={shop}")
+            return redirect(f"/install?shop={shop}&host={host}&embedded={embedded}")
             
         # Setup Shopify session
         shopify.Session.setup(api_key=SHOPIFY_API_KEY, secret=SHOPIFY_API_SECRET)
@@ -178,14 +183,23 @@ def callback():
             session['access_token'] = access_token
             session['shop'] = shop
             
-            return redirect(f"/app?shop={shop}")
+            # Redirect to app page with all necessary parameters
+            app_url = f"/app?shop={shop}"
+            if host:
+                app_url += f"&host={host}"
+            if embedded:
+                app_url += f"&embedded={embedded}"
+                
+            logger.info(f"Redirecting to app URL: {app_url}")
+            return redirect(app_url)
             
         except Exception as e:
             logger.error(f"Error requesting access token: {str(e)}")
-            return redirect(f"/install?shop={shop}")
+            return redirect(f"/install?shop={shop}&host={host}&embedded={embedded}")
         
     except Exception as e:
         logger.error(f"Callback error: {str(e)}")
+        logger.error(traceback.format_exc())
         return redirect(f"/install?shop={shop}")
 
 @app.route('/app')
@@ -194,13 +208,23 @@ def app_page():
     try:
         shop = request.args.get('shop')
         host = request.args.get('host')
+        embedded = request.args.get('embedded', '1')
+        
+        logger.info(f"App page requested for shop: {shop}")
+        logger.info(f"Host parameter: {host}")
+        logger.info(f"Embedded parameter: {embedded}")
         
         if not shop:
             return jsonify({"error": "Missing shop parameter"}), 400
 
         # Check if we have a valid session
         if session.get('shop') != shop or not session.get('access_token'):
-            return redirect(f"/install?shop={shop}")
+            install_url = f"/install?shop={shop}"
+            if host:
+                install_url += f"&host={host}"
+            if embedded:
+                install_url += f"&embedded={embedded}"
+            return redirect(install_url)
             
         # Create response with HTML content
         response = make_response(render_template_string("""
@@ -214,11 +238,16 @@ def app_page():
                     <script src="https://unpkg.com/@shopify/app-bridge-utils@3"></script>
                     <script>
                         document.addEventListener('DOMContentLoaded', function() {
-                            const host = decodeURIComponent('{{ host }}');
+                            const host = '{{ host }}';
                             const shop = '{{ shop }}';
+                            
+                            console.log('Host:', host);
+                            console.log('Shop:', shop);
                             
                             if (!host || !shop) {
                                 console.error('Missing required parameters');
+                                document.getElementById('error-message').textContent = 'Missing required parameters';
+                                document.getElementById('error-message').classList.add('visible');
                                 return;
                             }
                             
@@ -227,6 +256,8 @@ def app_page():
                                 host: host,
                                 forceRedirect: true
                             };
+                            
+                            console.log('App Bridge Config:', config);
                             
                             try {
                                 const createApp = window['app-bridge'].default;
@@ -247,7 +278,8 @@ def app_page():
                                 });
                             } catch (error) {
                                 console.error('Error initializing app:', error);
-                                document.getElementById('error-message').textContent = 'Error initializing app. Please try refreshing the page.';
+                                document.getElementById('error-message').textContent = 'Error initializing app: ' + error.message;
+                                document.getElementById('error-message').classList.add('visible');
                             }
                         });
                     </script>
@@ -265,6 +297,9 @@ def app_page():
                             color: #d82c0d;
                             display: none;
                             margin-top: 1em;
+                            padding: 1em;
+                            background-color: #fbeae5;
+                            border-radius: 4px;
                         }
                         .error-message.visible {
                             display: block;
@@ -296,6 +331,7 @@ def app_page():
         
     except Exception as e:
         logger.error(f"App page error: {str(e)}")
+        logger.error(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
