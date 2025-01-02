@@ -706,6 +706,91 @@ def recommendations_options():
     })
     return response
 
+@app.route('/test-huggingface')
+def test_huggingface():
+    """Test endpoint to verify Hugging Face API connection"""
+    try:
+        # Check for Hugging Face API token
+        huggingface_token = os.environ.get('HUGGINGFACE_API_TOKEN')
+        if not huggingface_token:
+            return jsonify({
+                "success": False,
+                "error": "Missing HUGGINGFACE_API_TOKEN environment variable"
+            }), 500
+            
+        if not huggingface_token.startswith('hf_'):
+            return jsonify({
+                "success": False,
+                "error": "Invalid Hugging Face API token format"
+            }), 500
+        
+        # Make a simple test request to Hugging Face
+        headers = {
+            "Authorization": f"Bearer {huggingface_token}",
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "inputs": "Test request to verify API connection.",
+            "parameters": {
+                "max_new_tokens": 50,
+                "temperature": 0.7,
+                "return_full_text": False
+            }
+        }
+        
+        logger.info("Making test request to Hugging Face API...")
+        logger.info(f"Using API token: {huggingface_token[:5]}...")
+        
+        response = requests.post(
+            "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2",
+            headers=headers,
+            json=payload,
+            timeout=30
+        )
+        
+        logger.info(f"Hugging Face API response status: {response.status_code}")
+        logger.info(f"Hugging Face API response: {response.text}")
+        
+        if response.status_code == 401:
+            return jsonify({
+                "success": False,
+                "error": "Invalid Hugging Face API token",
+                "status_code": response.status_code,
+                "response": response.text
+            }), 401
+        elif response.status_code != 200:
+            return jsonify({
+                "success": False,
+                "error": f"Hugging Face API error: {response.text}",
+                "status_code": response.status_code,
+                "response": response.text
+            }), response.status_code
+            
+        return jsonify({
+            "success": True,
+            "message": "Successfully connected to Hugging Face API",
+            "response": response.json()
+        })
+        
+    except requests.exceptions.Timeout:
+        return jsonify({
+            "success": False,
+            "error": "Request to Hugging Face API timed out"
+        }), 504
+    except requests.exceptions.RequestException as e:
+        return jsonify({
+            "success": False,
+            "error": f"Failed to connect to Hugging Face API: {str(e)}"
+        }), 500
+    except Exception as e:
+        logger.error(f"Test endpoint error: {str(e)}")
+        logger.error("Full error details:", exc_info=True)
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8000))
     app.run(host='0.0.0.0', port=port) 
