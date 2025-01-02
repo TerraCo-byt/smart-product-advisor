@@ -402,6 +402,10 @@ def get_product_recommendations(products, preferences):
         if not huggingface_token:
             logger.error("Missing HUGGINGFACE_API_TOKEN environment variable")
             raise Exception("Hugging Face API token not configured")
+            
+        if not huggingface_token.startswith('hf_'):
+            logger.error("Invalid Hugging Face API token format")
+            raise Exception("Invalid Hugging Face API token format")
         
         # Prepare product context
         product_context = "\n".join([
@@ -465,6 +469,7 @@ Provide the best product recommendations as a JSON array."""
         }
         
         logger.info("Making request to Hugging Face API...")
+        logger.info(f"Using API token: {huggingface_token[:5]}...")  # Log first 5 chars of token for verification
         
         try:
             response = requests.post(
@@ -476,7 +481,10 @@ Provide the best product recommendations as a JSON array."""
             
             logger.info(f"Hugging Face API response status: {response.status_code}")
             
-            if response.status_code != 200:
+            if response.status_code == 401:
+                logger.error("Unauthorized: Invalid Hugging Face API token")
+                raise Exception("Invalid Hugging Face API token")
+            elif response.status_code != 200:
                 logger.error(f"Hugging Face API error response: {response.text}")
                 raise Exception(f"Hugging Face API error: {response.text}")
                 
