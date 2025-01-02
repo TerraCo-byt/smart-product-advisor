@@ -213,10 +213,12 @@ def app_page():
                     <script src="https://unpkg.com/@shopify/app-bridge@3"></script>
                     <script src="https://unpkg.com/@shopify/app-bridge-utils@3"></script>
                     <script>
-                        window.addEventListener('load', function() {
-                            const host = '{{ host }}';
-                            if (!host) {
-                                console.error('Missing host parameter');
+                        document.addEventListener('DOMContentLoaded', function() {
+                            const host = decodeURIComponent('{{ host }}');
+                            const shop = '{{ shop }}';
+                            
+                            if (!host || !shop) {
+                                console.error('Missing required parameters');
                                 return;
                             }
                             
@@ -227,29 +229,57 @@ def app_page():
                             };
                             
                             try {
-                                const AppBridge = window['app-bridge'];
-                                const app = AppBridge.createApp(config);
-                                const actions = AppBridge.actions;
+                                const createApp = window['app-bridge'].default;
+                                const app = createApp(config);
                                 
                                 // Create the title bar
-                                const TitleBar = actions.TitleBar;
+                                const TitleBar = window['app-bridge'].actions.TitleBar;
                                 TitleBar.create(app, {
-                                    title: 'Smart Product Advisor'
+                                    title: 'Smart Product Advisor',
+                                    buttons: {
+                                        primary: {
+                                            label: 'Get Recommendations',
+                                            callback: () => {
+                                                console.log('Getting recommendations...');
+                                            }
+                                        }
+                                    }
                                 });
                             } catch (error) {
                                 console.error('Error initializing app:', error);
+                                document.getElementById('error-message').textContent = 'Error initializing app. Please try refreshing the page.';
                             }
                         });
                     </script>
+                    <style>
+                        body {
+                            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+                            margin: 0;
+                            padding: 20px;
+                        }
+                        .app-container {
+                            max-width: 800px;
+                            margin: 0 auto;
+                        }
+                        .error-message {
+                            color: #d82c0d;
+                            display: none;
+                            margin-top: 1em;
+                        }
+                        .error-message.visible {
+                            display: block;
+                        }
+                    </style>
                 </head>
                 <body>
-                    <div id="app">
+                    <div class="app-container">
                         <h1>Smart Product Advisor</h1>
                         <p>Loading your product recommendations...</p>
+                        <p id="error-message" class="error-message"></p>
                     </div>
                 </body>
             </html>
-        """, api_key=SHOPIFY_API_KEY, host=host))
+        """, api_key=SHOPIFY_API_KEY, host=host, shop=shop))
         
         # Set security headers
         response.headers.update({
