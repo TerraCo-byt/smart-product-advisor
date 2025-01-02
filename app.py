@@ -209,21 +209,38 @@ def app_page():
     """Main app interface"""
     try:
         shop = request.args.get('shop')
+        host = request.args.get('host', '')
+        
+        logger.info(f"App page requested for shop: {shop}")
+        logger.info(f"Host: {host}")
+        logger.info(f"Session data: {dict(session)}")
+        logger.info(f"Cookies: {request.cookies}")
+        
         if not shop:
+            logger.error("Missing shop parameter")
             return jsonify({"error": "Missing shop parameter"}), 400
             
         # Check session
-        if session.get('shop') != shop or not session.get('access_token'):
+        access_token = session.get('access_token')
+        session_shop = session.get('shop')
+        
+        if not access_token or not session_shop or session_shop != shop:
+            logger.error(f"Invalid session. Session shop: {session_shop}, Request shop: {shop}")
             return redirect(f"/install?shop={shop}")
             
-        # Return the main app interface
-        return render_template_string("""
+        # Create response with HTML content
+        response = make_response(render_template_string("""
             <!DOCTYPE html>
             <html>
                 <head>
                     <title>Smart Product Advisor</title>
                     <meta charset="utf-8">
                     <meta name="viewport" content="width=device-width, initial-scale=1">
+                    <script src="https://unpkg.com/@shopify/app-bridge@3"></script>
+                    <script>
+                        window.shopOrigin = "{{ shop }}";
+                        window.host = "{{ host }}";
+                    </script>
                     <style>
                         body {
                             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
@@ -280,11 +297,20 @@ def app_page():
                             padding: 20px;
                             display: none;
                         }
+                        .error {
+                            color: #d82c0d;
+                            background: #fbeae5;
+                            padding: 12px;
+                            border-radius: 4px;
+                            margin: 10px 0;
+                            display: none;
+                        }
                     </style>
                 </head>
                 <body>
                     <div class="container">
                         <h1>Smart Product Advisor</h1>
+                        <div id="error" class="error"></div>
                         <form id="recommendationForm">
                             <div class="form-group">
                                 <label for="price_range">Price Range</label>
@@ -322,13 +348,15 @@ def app_page():
                             const form = e.target;
                             const loading = document.getElementById('loading');
                             const recommendationsDiv = document.getElementById('recommendations');
+                            const errorDiv = document.getElementById('error');
                             
-                            // Show loading
+                            // Reset UI
                             loading.style.display = 'block';
                             recommendationsDiv.innerHTML = '';
+                            errorDiv.style.display = 'none';
                             
                             try {
-                                const response = await fetch('/api/recommendations?shop={{ shop }}', {
+                                const response = await fetch(`/api/recommendations?shop=${window.shopOrigin}`, {
                                     method: 'POST',
                                     headers: {
                                         'Content-Type': 'application/json'
@@ -337,14 +365,19 @@ def app_page():
                                         price_range: form.price_range.value,
                                         category: form.category.value,
                                         keywords: form.keywords.value.split(',').map(k => k.trim()).filter(k => k)
-                                    })
+                                    }),
+                                    credentials: 'include'
                                 });
                                 
-                                if (!response.ok) {
-                                    throw new Error('Failed to get recommendations');
-                                }
-                                
                                 const data = await response.json();
+                                
+                                if (!response.ok) {
+                                    if (response.status === 401 && data.redirect_url) {
+                                        window.location.href = data.redirect_url;
+                                        return;
+                                    }
+                                    throw new Error(data.error || 'Failed to get recommendations');
+                                }
                                 
                                 if (data.success && data.recommendations) {
                                     recommendationsDiv.innerHTML = `
@@ -372,6 +405,8 @@ def app_page():
                                     throw new Error('No recommendations found');
                                 }
                             } catch (error) {
+                                errorDiv.textContent = error.message;
+                                errorDiv.style.display = 'block';
                                 recommendationsDiv.innerHTML = `
                                     <div style="text-align: center; padding: 20px; color: #666;">
                                         <p>Sorry, we couldn't get recommendations at this time.</p>
@@ -385,11 +420,19 @@ def app_page():
                     </script>
                 </body>
             </html>
-        """, shop=shop)
+        """, shop=shop, host=host))
+        
+        # Set security headers
+        response.headers.update({
+            'Content-Security-Policy': "frame-ancestors https://*.myshopify.com https://admin.shopify.com;",
+            'Content-Type': 'text/html; charset=utf-8'
+        })
+        
+        return response
         
     except Exception as e:
         logger.error(f"App page error: {str(e)}")
-        logger.error(traceback.format_exc())
+        logger.error("Full error details:", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
 def get_product_recommendations(products, preferences):
@@ -541,21 +584,32 @@ Provide the best product recommendations as a JSON array."""
 def recommendations():
     """Handle recommendation requests"""
     try:
-        shop = request.args.get('shop') or request.headers.get('X-Shop-Domain')
+        shop = request.args.get('shop')
         logger.info(f"Shop from request: {shop}")
         logger.info(f"Headers: {dict(request.headers)}")
         logger.info(f"Session data: {dict(session)}")
+        logger.info(f"Cookies: {request.cookies}")
         
         if not shop:
             logger.error("Missing shop parameter")
             return jsonify({"error": "Missing shop parameter"}), 400
             
         # Check session
-        if session.get('shop') != shop or not session.get('access_token'):
-            logger.error(f"Session validation failed. Session shop: {session.get('shop')}, Request shop: {shop}")
-            logger.error(f"Access token present: {bool(session.get('access_token'))}")
+        access_token = session.get('access_token')
+        session_shop = session.get('shop')
+        logger.info(f"Session shop: {session_shop}, Access token: {bool(access_token)}")
+        
+        if not access_token or not session_shop:
+            logger.error("No session found")
             return jsonify({
-                "error": "Authentication required",
+                "error": "No session found",
+                "redirect_url": f"/install?shop={shop}"
+            }), 401
+            
+        if session_shop != shop:
+            logger.error(f"Session shop ({session_shop}) doesn't match request shop ({shop})")
+            return jsonify({
+                "error": "Invalid shop",
                 "redirect_url": f"/install?shop={shop}"
             }), 401
             
@@ -574,7 +628,7 @@ def recommendations():
         # Setup Shopify session
         shopify.Session.setup(api_key=SHOPIFY_API_KEY, secret=SHOPIFY_API_SECRET)
         shopify_session = shopify.Session(shop, API_VERSION)
-        shopify_session.token = session.get('access_token')
+        shopify_session.token = access_token
         logger.info(f"Created Shopify session for shop: {shop}")
         
         shopify.ShopifyResource.activate_session(shopify_session)
@@ -602,10 +656,19 @@ def recommendations():
             recommendations = recommendations[:6]  # Limit to top 6
             logger.info("Sorted and limited recommendations")
             
-            return jsonify({
+            response = jsonify({
                 "success": True,
                 "recommendations": recommendations
             })
+            
+            # Set CORS headers
+            response.headers.update({
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Methods': 'POST, OPTIONS',
+                'Access-Control-Allow-Headers': 'Content-Type'
+            })
+            
+            return response
             
         finally:
             logger.info("Clearing Shopify session")
@@ -619,6 +682,29 @@ def recommendations():
             "error": "Failed to get recommendations",
             "details": str(e)
         }), 500
+
+@app.after_request
+def after_request(response):
+    """Add CORS headers to all responses"""
+    response.headers.update({
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type',
+        'Access-Control-Allow-Credentials': 'true'
+    })
+    return response
+
+@app.route('/api/recommendations', methods=['OPTIONS'])
+def recommendations_options():
+    """Handle CORS preflight requests"""
+    response = make_response()
+    response.headers.update({
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type',
+        'Access-Control-Allow-Credentials': 'true'
+    })
+    return response
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8000))
