@@ -238,7 +238,7 @@ def app_page():
                     <script src="https://unpkg.com/@shopify/app-bridge-utils@3"></script>
                     <script>
                         document.addEventListener('DOMContentLoaded', function() {
-                            const host = '{{ host }}';
+                            const host = decodeURIComponent('{{ host }}');
                             const shop = '{{ shop }}';
                             
                             console.log('Host:', host);
@@ -251,20 +251,21 @@ def app_page():
                                 return;
                             }
                             
-                            const config = {
-                                apiKey: '{{ api_key }}',
-                                host: host,
-                                forceRedirect: true
-                            };
-                            
-                            console.log('App Bridge Config:', config);
-                            
                             try {
-                                const createApp = window['app-bridge'].default;
+                                const config = {
+                                    apiKey: '{{ api_key }}',
+                                    host: host,
+                                    forceRedirect: true
+                                };
+                                
+                                console.log('App Bridge Config:', config);
+                                
+                                const AppBridge = window['app-bridge'];
+                                const createApp = AppBridge.default;
                                 const app = createApp(config);
                                 
                                 // Create the title bar
-                                const TitleBar = window['app-bridge'].actions.TitleBar;
+                                const TitleBar = AppBridge.actions.TitleBar;
                                 TitleBar.create(app, {
                                     title: 'Smart Product Advisor',
                                     buttons: {
@@ -276,10 +277,16 @@ def app_page():
                                         }
                                     }
                                 });
+                                
+                                // Hide loading message once app is initialized
+                                document.getElementById('loading-message').style.display = 'none';
+                                document.getElementById('app-content').style.display = 'block';
+                                
                             } catch (error) {
                                 console.error('Error initializing app:', error);
                                 document.getElementById('error-message').textContent = 'Error initializing app: ' + error.message;
                                 document.getElementById('error-message').classList.add('visible');
+                                document.getElementById('loading-message').style.display = 'none';
                             }
                         });
                     </script>
@@ -288,10 +295,15 @@ def app_page():
                             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
                             margin: 0;
                             padding: 20px;
+                            background-color: #f6f6f7;
                         }
                         .app-container {
                             max-width: 800px;
                             margin: 0 auto;
+                            background-color: white;
+                            padding: 20px;
+                            border-radius: 8px;
+                            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
                         }
                         .error-message {
                             color: #d82c0d;
@@ -304,12 +316,26 @@ def app_page():
                         .error-message.visible {
                             display: block;
                         }
+                        #app-content {
+                            display: none;
+                        }
+                        .loading {
+                            text-align: center;
+                            padding: 2em;
+                            color: #637381;
+                        }
                     </style>
                 </head>
                 <body>
                     <div class="app-container">
-                        <h1>Smart Product Advisor</h1>
-                        <p>Loading your product recommendations...</p>
+                        <div id="loading-message" class="loading">
+                            <h2>Smart Product Advisor</h2>
+                            <p>Loading your product recommendations...</p>
+                        </div>
+                        <div id="app-content">
+                            <h1>Smart Product Advisor</h1>
+                            <p>Ready to help you find the perfect products for your customers!</p>
+                        </div>
                         <p id="error-message" class="error-message"></p>
                     </div>
                 </body>
