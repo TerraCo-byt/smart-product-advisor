@@ -30,8 +30,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Set API Version
-API_VERSION = '2023-10'
+# Set API Version and validate it immediately
+API_VERSION = '2023-10'  # Use a stable version
 SCOPES = ['read_products', 'write_products', 'read_themes', 'write_themes']
 
 # Initialize Flask app
@@ -120,15 +120,26 @@ def after_request(response):
     
     return response
 
-# Get available API versions
-AVAILABLE_VERSIONS = shopify.ApiVersion.versions
-logger.info(f"Available Shopify API versions: {AVAILABLE_VERSIONS}")
+# Validate Shopify API version before proceeding
+def validate_api_version():
+    """Validate the API version and return available versions"""
+    try:
+        shopify.Session.setup(api_key=SHOPIFY_API_KEY, secret=SHOPIFY_API_SECRET)
+        versions = shopify.ApiVersion.versions
+        available_versions = [str(version) for version in versions]
+        
+        if API_VERSION not in available_versions:
+            raise ValueError(f"Invalid API version: {API_VERSION}. Available versions: {available_versions}")
+            
+        return available_versions
+    except Exception as e:
+        logger.error(f"API version validation error: {str(e)}")
+        raise
 
-# Validate API version
-if API_VERSION not in [str(version) for version in AVAILABLE_VERSIONS]:
-    logger.error(f"Invalid API version: {API_VERSION}")
-    logger.info(f"Available versions: {AVAILABLE_VERSIONS}")
-    raise ValueError(f"Invalid API version: {API_VERSION}. Available versions: {AVAILABLE_VERSIONS}")
+# Validate API version on startup
+AVAILABLE_VERSIONS = validate_api_version()
+logger.info(f"Using Shopify API version: {API_VERSION}")
+logger.info(f"Available API versions: {AVAILABLE_VERSIONS}")
 
 # Validate configuration
 if not SHOPIFY_API_KEY or not SHOPIFY_API_SECRET:
