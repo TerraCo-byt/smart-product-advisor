@@ -51,20 +51,24 @@ CORS(app,
                  "https://admin.shopify.com",
                  "https://*.myshopify.com",
                  "https://*.onrender.com",
-                 "http://localhost:8000"
+                 "http://localhost:8000",
+                 "https://smart-advisor-test.myshopify.com"
              ],
              "methods": ["GET", "POST", "OPTIONS"],
              "allow_headers": [
                  "Content-Type",
                  "Authorization",
                  "X-Shop-Domain",
-                 "X-Shopify-Access-Token"
+                 "X-Shopify-Access-Token",
+                 "Origin",
+                 "Accept"
              ],
              "expose_headers": [
                  "Content-Range",
                  "X-Content-Range"
              ],
              "supports_credentials": True,
+             "max_age": 3600,
              "vary": "Origin"
          }
      })
@@ -811,24 +815,25 @@ def after_request(response):
             "https://admin.shopify.com",
             "https://*.myshopify.com",
             "https://*.onrender.com",
-            "http://localhost:8000"
+            "http://localhost:8000",
+            "https://smart-advisor-test.myshopify.com"
         ]
         
         # Check if origin matches any allowed pattern
         is_allowed = any(
-            origin.endswith(allowed.replace('*', '')) 
+            origin == allowed or  # Exact match
+            (allowed.startswith('https://*.') and origin.endswith(allowed[8:]))  # Wildcard match
             for allowed in allowed_origins
         )
         
         if is_allowed:
             response.headers['Access-Control-Allow-Origin'] = origin
             response.headers['Access-Control-Allow-Credentials'] = 'true'
+            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Shop-Domain, X-Shopify-Access-Token, Origin, Accept'
+            response.headers['Access-Control-Max-Age'] = '3600'
             response.headers['Vary'] = 'Origin'
     
-    response.headers.update({
-        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Shop-Domain, X-Shopify-Access-Token'
-    })
     return response
 
 @app.route('/api/recommendations', methods=['OPTIONS'])
@@ -843,24 +848,25 @@ def recommendations_options():
             "https://admin.shopify.com",
             "https://*.myshopify.com",
             "https://*.onrender.com",
-            "http://localhost:8000"
+            "http://localhost:8000",
+            "https://smart-advisor-test.myshopify.com"
         ]
         
         # Check if origin matches any allowed pattern
         is_allowed = any(
-            origin.endswith(allowed.replace('*', '')) 
+            origin == allowed or  # Exact match
+            (allowed.startswith('https://*.') and origin.endswith(allowed[8:]))  # Wildcard match
             for allowed in allowed_origins
         )
         
         if is_allowed:
             response.headers['Access-Control-Allow-Origin'] = origin
             response.headers['Access-Control-Allow-Credentials'] = 'true'
+            response.headers['Access-Control-Allow-Methods'] = 'POST, OPTIONS'
+            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Shop-Domain, X-Shopify-Access-Token, Origin, Accept'
+            response.headers['Access-Control-Max-Age'] = '3600'
             response.headers['Vary'] = 'Origin'
     
-    response.headers.update({
-        'Access-Control-Allow-Methods': 'POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Shop-Domain, X-Shopify-Access-Token'
-    })
     return response
 
 @app.route('/test-huggingface')
