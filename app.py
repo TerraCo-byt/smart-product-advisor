@@ -11,6 +11,8 @@ import base64
 import datetime
 from flask_session import Session
 from dotenv import load_dotenv
+import json
+import requests
 
 # Load environment variables
 load_dotenv()
@@ -272,7 +274,7 @@ def app_page():
                                         primary: {
                                             label: 'Get Recommendations',
                                             callback: () => {
-                                                document.getElementById('recommendation-form').submit();
+                                                getRecommendations();
                                             }
                                         }
                                     }
@@ -288,6 +290,56 @@ def app_page():
                                 document.getElementById('error-message').classList.add('visible');
                                 document.getElementById('loading-message').style.display = 'none';
                             }
+                            
+                            // Handle form submission
+                            async function getRecommendations() {
+                                try {
+                                    document.getElementById('recommendations').style.display = 'none';
+                                    document.getElementById('loading-recommendations').style.display = 'block';
+                                    document.getElementById('error-message').style.display = 'none';
+                                    
+                                    const formData = new FormData(document.getElementById('recommendation-form'));
+                                    const response = await fetch('/api/recommendations?shop=' + encodeURIComponent(shop), {
+                                        method: 'POST',
+                                        body: formData,
+                                        credentials: 'include'
+                                    });
+                                    
+                                    const data = await response.json();
+                                    
+                                    if (!response.ok) {
+                                        throw new Error(data.error || 'Failed to get recommendations');
+                                    }
+                                    
+                                    const recommendationsHtml = data.recommendations.map(rec => `
+                                        <div class="recommendation">
+                                            <div class="product-image">
+                                                ${rec.product.image_url ? `<img src="${rec.product.image_url}" alt="${rec.product.title}">` : ''}
+                                            </div>
+                                            <div class="product-info">
+                                                <h3>${rec.product.title}</h3>
+                                                <p class="price">$${rec.product.price.toFixed(2)}</p>
+                                                <p class="confidence">Confidence: ${(rec.confidence_score * 100).toFixed(1)}%</p>
+                                                <p class="explanation">${rec.explanation}</p>
+                                                <a href="${rec.product.url}" target="_blank" class="view-product">View Product</a>
+                                            </div>
+                                        </div>
+                                    `).join('');
+                                    
+                                    document.getElementById('recommendations').innerHTML = recommendationsHtml;
+                                    document.getElementById('recommendations').style.display = 'block';
+                                    document.getElementById('loading-recommendations').style.display = 'none';
+                                    
+                                } catch (error) {
+                                    console.error('Error getting recommendations:', error);
+                                    document.getElementById('error-message').textContent = error.message;
+                                    document.getElementById('error-message').classList.add('visible');
+                                    document.getElementById('loading-recommendations').style.display = 'none';
+                                }
+                            }
+                            
+                            // Attach the function to window for the button callback
+                            window.getRecommendations = getRecommendations;
                         });
                     </script>
                     <style>
@@ -374,6 +426,66 @@ def app_page():
                             font-size: 1.2em;
                             line-height: 1;
                         }
+                        #recommendations {
+                            display: none;
+                            margin-top: 2em;
+                        }
+                        .recommendation {
+                            display: flex;
+                            gap: 1.5em;
+                            padding: 1.5em;
+                            border: 1px solid #e1e3e5;
+                            border-radius: 8px;
+                            margin-bottom: 1em;
+                        }
+                        .product-image {
+                            flex: 0 0 150px;
+                        }
+                        .product-image img {
+                            width: 100%;
+                            height: 150px;
+                            object-fit: cover;
+                            border-radius: 4px;
+                        }
+                        .product-info {
+                            flex: 1;
+                        }
+                        .product-info h3 {
+                            margin: 0 0 0.5em;
+                            color: #212b36;
+                        }
+                        .price {
+                            font-size: 1.2em;
+                            font-weight: 600;
+                            color: #212b36;
+                            margin: 0.5em 0;
+                        }
+                        .confidence {
+                            color: #637381;
+                            margin: 0.5em 0;
+                        }
+                        .explanation {
+                            color: #454f5b;
+                            margin: 0.5em 0;
+                        }
+                        .view-product {
+                            display: inline-block;
+                            padding: 0.5em 1em;
+                            background-color: #5c6ac4;
+                            color: white;
+                            text-decoration: none;
+                            border-radius: 4px;
+                            margin-top: 1em;
+                        }
+                        .view-product:hover {
+                            background-color: #202e78;
+                        }
+                        #loading-recommendations {
+                            display: none;
+                            text-align: center;
+                            padding: 2em;
+                            color: #637381;
+                        }
                     </style>
                 </head>
                 <body>
@@ -386,7 +498,7 @@ def app_page():
                             <h1>Smart Product Advisor</h1>
                             <p>Let's find the perfect products for your customers!</p>
                             
-                            <form id="recommendation-form" action="/api/recommendations" method="POST">
+                            <form id="recommendation-form">
                                 <div class="form-group">
                                     <label for="price-range">Price Range</label>
                                     <select id="price-range" name="price_range">
@@ -417,6 +529,12 @@ def app_page():
                                     <input type="hidden" name="keywords" id="keywords-hidden">
                                 </div>
                             </form>
+                            
+                            <div id="loading-recommendations">
+                                <p>Generating recommendations...</p>
+                            </div>
+                            
+                            <div id="recommendations"></div>
                         </div>
                         <p id="error-message" class="error-message"></p>
                     </div>
@@ -490,6 +608,174 @@ def app_page():
         logger.error(f"App page error: {str(e)}")
         logger.error(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
+
+def get_product_recommendations(products, preferences):
+    """Generate AI-powered product recommendations"""
+    try:
+        logger.info(f"Generating recommendations for preferences: {preferences}")
+        
+        # Prepare product context
+        product_context = "\n".join([
+            f"Product {i+1}:"
+            f"\nTitle: {p.title}"
+            f"\nType: {p.product_type}"
+            f"\nPrice: ${p.variants[0].price}"
+            f"\nDescription: {p.body_html}"
+            f"\nTags: {', '.join(p.tags)}"
+            for i, p in enumerate(products)
+        ])
+        
+        # Prepare user preferences
+        user_prefs = (
+            f"Price Range: {preferences.get('price_range', 'Any')}\n"
+            f"Category: {preferences.get('category', 'Any')}\n"
+            f"Keywords: {', '.join(preferences.get('keywords', []))}"
+        )
+        
+        # Construct the prompt
+        system_prompt = """You are a smart product recommendation system. Based on the available products and user preferences, recommend the most suitable products. For each recommendation:
+1. Check if the product matches the price range and category
+2. Evaluate how well it matches the user's keywords and preferences
+3. Provide a clear explanation of why this product is recommended
+4. Give a confidence score between 0 and 1
+
+Return your response as a JSON array with this structure:
+[{
+    "product_index": (number starting from 1),
+    "confidence_score": (number between 0 and 1),
+    "explanation": "Clear explanation of why this product matches"
+}]"""
+
+        user_prompt = f"""Available Products:
+{product_context}
+
+User Preferences:
+{user_prefs}
+
+Provide the best product recommendations as a JSON array."""
+
+        # Make request to Hugging Face
+        headers = {
+            "Authorization": f"Bearer {os.environ.get('HUGGINGFACE_API_TOKEN')}",
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "inputs": f"{system_prompt}\n\n{user_prompt}",
+            "parameters": {
+                "max_new_tokens": 1000,
+                "temperature": 0.7,
+                "return_full_text": False
+            }
+        }
+        
+        response = requests.post(
+            "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2",
+            headers=headers,
+            json=payload,
+            timeout=30
+        )
+        
+        if response.status_code != 200:
+            raise Exception(f"Hugging Face API error: {response.text}")
+            
+        # Parse recommendations
+        recommendations_text = response.json()[0]["generated_text"]
+        json_str = recommendations_text.strip()
+        if "```json" in json_str:
+            json_str = json_str.split("```json")[1].split("```")[0]
+        elif "```" in json_str:
+            json_str = json_str.split("```")[1]
+            
+        recommendations = json.loads(json_str)
+        
+        # Format recommendations
+        formatted_recommendations = []
+        for rec in recommendations:
+            product_idx = rec['product_index'] - 1
+            if 0 <= product_idx < len(products):
+                product = products[product_idx]
+                formatted_rec = {
+                    'product': {
+                        'title': product.title,
+                        'price': float(product.variants[0].price),
+                        'image_url': product.images[0].src if product.images else None,
+                        'url': f"https://{request.headers.get('X-Shop-Domain')}/products/{product.handle}"
+                    },
+                    'confidence_score': float(rec['confidence_score']),
+                    'explanation': rec['explanation']
+                }
+                formatted_recommendations.append(formatted_rec)
+                
+        return formatted_recommendations
+        
+    except Exception as e:
+        logger.error(f"Error generating recommendations: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise
+
+@app.route('/api/recommendations', methods=['POST'])
+def recommendations():
+    """Handle recommendation requests"""
+    try:
+        shop = request.args.get('shop') or request.headers.get('X-Shop-Domain')
+        if not shop:
+            return jsonify({"error": "Missing shop parameter"}), 400
+            
+        # Check session
+        if session.get('shop') != shop or not session.get('access_token'):
+            return jsonify({
+                "error": "Authentication required",
+                "redirect_url": f"/install?shop={shop}"
+            }), 401
+            
+        # Get form data
+        data = request.get_json() or request.form.to_dict()
+        preferences = {
+            'price_range': data.get('price_range', 'any'),
+            'category': data.get('category', 'any'),
+            'keywords': data.get('keywords', '').split(',') if data.get('keywords') else []
+        }
+        
+        logger.info(f"Received recommendation request for shop {shop}")
+        logger.info(f"Preferences: {preferences}")
+        
+        # Setup Shopify session
+        shopify.Session.setup(api_key=SHOPIFY_API_KEY, secret=SHOPIFY_API_SECRET)
+        shopify_session = shopify.Session(shop, API_VERSION)
+        shopify_session.token = session.get('access_token')
+        shopify.ShopifyResource.activate_session(shopify_session)
+        
+        try:
+            # Get products
+            products = shopify.Product.find(limit=20)
+            if not products:
+                return jsonify({
+                    "error": "No products found in shop"
+                }), 404
+                
+            # Generate recommendations
+            recommendations = get_product_recommendations(products, preferences)
+            
+            # Sort by confidence score
+            recommendations.sort(key=lambda x: x['confidence_score'], reverse=True)
+            recommendations = recommendations[:6]  # Limit to top 6
+            
+            return jsonify({
+                "success": True,
+                "recommendations": recommendations
+            })
+            
+        finally:
+            shopify.ShopifyResource.clear_session()
+            
+    except Exception as e:
+        logger.error(f"Error getting recommendations: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({
+            "error": "Failed to get recommendations",
+            "details": str(e)
+        }), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8000))
