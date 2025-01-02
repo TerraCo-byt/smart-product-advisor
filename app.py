@@ -44,6 +44,26 @@ SHOPIFY_API_SECRET = os.environ.get('SHOPIFY_API_SECRET')
 APP_URL = os.environ.get('RENDER_EXTERNAL_URL', os.environ.get('APP_URL', 'http://localhost:8000'))
 HUGGINGFACE_API_TOKEN = os.environ.get('HUGGINGFACE_API_TOKEN')
 
+# Initialize Shopify API
+shopify.Session.setup(api_key=SHOPIFY_API_KEY, secret=SHOPIFY_API_SECRET)
+AVAILABLE_VERSIONS = [str(version) for version in shopify.ApiVersion.versions]
+
+if API_VERSION not in AVAILABLE_VERSIONS:
+    raise ValueError(f"Invalid API version: {API_VERSION}. Available versions: {AVAILABLE_VERSIONS}")
+
+logger.info(f"Using Shopify API version: {API_VERSION}")
+logger.info(f"Available API versions: {AVAILABLE_VERSIONS}")
+
+def create_shopify_session(shop):
+    """Create a Shopify session with validated API version"""
+    try:
+        if API_VERSION not in AVAILABLE_VERSIONS:
+            raise ValueError(f"Invalid API version: {API_VERSION}. Available versions: {AVAILABLE_VERSIONS}")
+        return shopify.Session(shop, API_VERSION)
+    except Exception as e:
+        logger.error(f"Error creating Shopify session: {str(e)}")
+        raise
+
 # Configure session
 app.config.update(
     SESSION_TYPE='filesystem',
@@ -511,9 +531,8 @@ def app_page():
         # Check if we have a valid session for this shop
         if session.get('shop') == shop and session.get('access_token'):
             try:
-                # Setup Shopify session
-                shopify.Session.setup(api_key=SHOPIFY_API_KEY, secret=SHOPIFY_API_SECRET)
-                shopify_session = shopify.Session(shop, API_VERSION)
+                # Create validated session
+                shopify_session = create_shopify_session(shop)
                 shopify_session.token = session.get('access_token')
                 
                 # Verify the token works
@@ -570,9 +589,6 @@ def app_page():
                     "https://*.shopify.com "
                     "https://partners.shopify.com"
                 )
-                # Remove X-Frame-Options as it's not needed when CSP frame-ancestors is present
-                if 'X-Frame-Options' in response.headers:
-                    del response.headers['X-Frame-Options']
                 
                 return response
                 
@@ -625,9 +641,8 @@ def install():
         # Generate a nonce for state validation
         state = base64.b64encode(os.urandom(16)).decode('utf-8')
         
-        # Create permission URL
-        shopify.Session.setup(api_key=SHOPIFY_API_KEY, secret=SHOPIFY_API_SECRET)
-        shopify_session = shopify.Session(shop, API_VERSION)
+        # Create permission URL using validated session
+        shopify_session = create_shopify_session(shop)
         redirect_uri = f"{APP_URL}/auth/callback"
         
         auth_url = shopify_session.create_permission_url(
@@ -804,11 +819,10 @@ def callback():
             logger.warning(f"State mismatch. Received: {state}, Stored: {stored_state}")
             return redirect(f"/install?shop={shop}&host={host}&embedded={embedded}")
             
-        # Setup Shopify session
-        shopify.Session.setup(api_key=SHOPIFY_API_KEY, secret=SHOPIFY_API_SECRET)
-        shopify_session = shopify.Session(shop, API_VERSION)
-        
         try:
+            # Create validated session
+            shopify_session = create_shopify_session(shop)
+            
             # Request access token
             access_token = shopify_session.request_token(request.args)
             if not access_token:
@@ -840,16 +854,6 @@ def callback():
                 'Access-Control-Allow-Origin': request.headers.get('Origin', ''),
                 'Access-Control-Allow-Credentials': 'true'
             })
-            
-            # Set secure cookie
-            response.set_cookie(
-                'sp_session',
-                session.sid,
-                secure=True,
-                httponly=True,
-                samesite='None',
-                path='/'
-            )
             
             return response
             
