@@ -25,11 +25,4 @@ services:
       minInstances: 1
       maxInstances: 1
       targetMemoryPercent: 50
-      targetCPUPercent: 50
-
-  - type: redis
-    name: smart-advisor-redis
-    ipAllowList: []
-    plan: free
-    maxmemoryPolicy: noeviction
-    maxmemoryMb: 25 
+      targetCPUPercent: 50 
