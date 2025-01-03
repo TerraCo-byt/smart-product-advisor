@@ -470,6 +470,50 @@ def app_page():
         logger.error("Full error details:", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
+def parse_recommendations_text(text):
+    """Parse recommendations from text response"""
+    try:
+        recommendations = []
+        current_rec = None
+        
+        for line in text.split('\n'):
+            line = line.strip()
+            if not line:
+                continue
+                
+            # Check for product line
+            if line.startswith(('1.', '2.', '3.', '4.', '5.', '6.')):
+                if current_rec:
+                    recommendations.append(current_rec)
+                current_rec = {
+                    'product_index': int(line.split('.')[0]),
+                    'explanation': '',
+                    'confidence_score': 0.0
+                }
+                
+            # Check for explanation
+            elif line.startswith('Explanation:'):
+                if current_rec:
+                    current_rec['explanation'] = line.replace('Explanation:', '').strip()
+                    
+            # Check for confidence score
+            elif line.startswith('Confidence Score:'):
+                if current_rec:
+                    try:
+                        score = float(line.replace('Confidence Score:', '').strip())
+                        current_rec['confidence_score'] = score
+                    except ValueError:
+                        current_rec['confidence_score'] = 0.5
+                        
+        # Add the last recommendation
+        if current_rec:
+            recommendations.append(current_rec)
+            
+        return recommendations
+    except Exception as e:
+        logger.error(f"Error parsing recommendations text: {str(e)}")
+        raise Exception(f"Failed to parse recommendations text: {str(e)}")
+
 def get_product_recommendations(products, preferences):
     """Generate AI-powered product recommendations"""
     try:
@@ -525,12 +569,16 @@ def get_product_recommendations(products, preferences):
 3. Provide a clear explanation of why this product is recommended
 4. Give a confidence score between 0 and 1
 
-Return your response as a JSON array with this structure:
-[{
-    "product_index": (number starting from 1),
-    "confidence_score": (number between 0 and 1),
-    "explanation": "Clear explanation of why this product matches"
-}]"""
+Format your response like this:
+1. Product X: [Product Title]
+   Explanation: [Clear explanation of why this product matches]
+   Confidence Score: [number between 0 and 1]
+
+2. Product Y: [Product Title]
+   Explanation: [Clear explanation of why this product matches]
+   Confidence Score: [number between 0 and 1]
+
+And so on..."""
 
         user_prompt = f"""Available Products:
 {product_context}
@@ -538,7 +586,7 @@ Return your response as a JSON array with this structure:
 User Preferences:
 {user_prefs}
 
-Provide the best product recommendations as a JSON array."""
+Please recommend the best matching products using the format above."""
 
         logger.info("Successfully constructed prompts")
 
@@ -586,26 +634,18 @@ Provide the best product recommendations as a JSON array."""
                 logger.info(f"Raw API response: {response_data}")
                 
                 recommendations_text = response_data[0]["generated_text"]
-                json_str = recommendations_text.strip()
+                logger.info(f"Generated text: {recommendations_text}")
                 
-                # Extract JSON from markdown code blocks if present
-                if "```json" in json_str:
-                    json_str = json_str.split("```json")[1].split("```")[0]
-                elif "```" in json_str:
-                    json_str = json_str.split("```")[1]
-                    
-                logger.info(f"Extracted JSON string: {json_str}")
-                
-                recommendations = json.loads(json_str)
+                # Parse recommendations from text
+                recommendations = parse_recommendations_text(recommendations_text)
                 logger.info(f"Parsed recommendations: {recommendations}")
                 
-                if not isinstance(recommendations, list):
-                    raise Exception("Invalid recommendations format")
+                if not recommendations:
+                    raise Exception("No valid recommendations found in response")
                     
             except json.JSONDecodeError as e:
-                logger.error(f"Failed to parse recommendations JSON: {str(e)}")
-                logger.error(f"Raw text: {recommendations_text}")
-                raise Exception("Failed to parse recommendations data")
+                logger.error(f"Failed to parse API response JSON: {str(e)}")
+                raise Exception("Failed to parse API response")
             except Exception as e:
                 logger.error(f"Error processing recommendations: {str(e)}")
                 raise Exception(f"Failed to process recommendations: {str(e)}")
