@@ -36,7 +36,9 @@ app.config.update(
     PERMANENT_SESSION_LIFETIME=datetime.timedelta(days=1),
     SESSION_COOKIE_SECURE=True,
     SESSION_COOKIE_HTTPONLY=True,
-    SESSION_COOKIE_SAMESITE='None'
+    SESSION_COOKIE_SAMESITE='None',
+    SESSION_COOKIE_NAME='smart_advisor_session',
+    SESSION_COOKIE_DOMAIN=None  # Allow the cookie to work across subdomains
 )
 
 # Initialize Flask-Session
@@ -61,11 +63,13 @@ CORS(app,
                  "X-Shop-Domain",
                  "X-Shopify-Access-Token",
                  "Origin",
-                 "Accept"
+                 "Accept",
+                 "Cookie"
              ],
              "expose_headers": [
                  "Content-Range",
-                 "X-Content-Range"
+                 "X-Content-Range",
+                 "Set-Cookie"
              ],
              "supports_credentials": True,
              "max_age": 3600,
@@ -660,19 +664,22 @@ def recommendations():
             
         logger.info(f"Processing request for shop: {shop}")
         logger.info(f"Headers: {dict(request.headers)}")
+        logger.info(f"Session data: {dict(session) if session else 'No session'}")
         
         # Get request data
         try:
+            raw_data = request.get_data()
+            logger.info(f"Raw request data: {raw_data}")
+            
             if request.is_json:
                 data = request.get_json()
+            elif raw_data:
+                data = json.loads(raw_data.decode('utf-8'))
             else:
                 data = request.form.to_dict()
                 
-            logger.info(f"Request data: {data}")
+            logger.info(f"Processed request data: {data}")
             
-            if not data:
-                data = json.loads(request.get_data().decode('utf-8'))
-                
         except Exception as e:
             logger.error(f"Error parsing request data: {str(e)}")
             return jsonify({
@@ -710,11 +717,17 @@ def recommendations():
             shopify.Session.setup(api_key=SHOPIFY_API_KEY, secret=SHOPIFY_API_SECRET)
             shopify_session = shopify.Session(shop, API_VERSION)
             
-            # Try to get access token from session or request
+            # Try to get access token from session
             access_token = None
             if session and 'access_token' in session:
                 access_token = session.get('access_token')
                 logger.info("Got access token from session")
+            
+            # If no access token in session, try to get from headers
+            if not access_token:
+                access_token = request.headers.get('X-Shopify-Access-Token')
+                if access_token:
+                    logger.info("Got access token from headers")
             
             if not access_token:
                 logger.error("No access token found")
@@ -772,11 +785,13 @@ def recommendations():
             
             # Create response with CORS headers
             response = make_response(jsonify(response_data))
+            origin = request.headers.get('Origin', '*')
             response.headers.update({
-                'Access-Control-Allow-Origin': request.headers.get('Origin', '*'),
+                'Access-Control-Allow-Origin': origin,
                 'Access-Control-Allow-Methods': 'POST, OPTIONS',
-                'Access-Control-Allow-Headers': 'Content-Type',
+                'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Shop-Domain, X-Shopify-Access-Token, Origin, Accept',
                 'Access-Control-Allow-Credentials': 'true',
+                'Access-Control-Max-Age': '3600',
                 'Vary': 'Origin'
             })
             
