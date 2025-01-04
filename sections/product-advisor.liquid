@@ -234,24 +234,21 @@ class SmartAdvisor {
 
     const formData = new FormData(this.form);
     const data = {
-      preferences: {
-        price_range: formData.get('price_range'),
-        category: formData.get('category'),
-        keywords: formData.get('keywords').split(',').map(k => k.trim())
-      },
-      context: {
-        current_product: {{ product.id | json }},
-        time_of_day: new Date().getHours(),
-        device_type: /Mobile|Android|iPhone/i.test(navigator.userAgent) ? 'mobile' : 'desktop'
-      }
+      price_range: formData.get('price_range'),
+      category: formData.get('category'),
+      keywords: formData.get('keywords').split(',').map(k => k.trim()).filter(Boolean)
     };
 
     try {
-      const response = await fetch(`${this.apiUrl}/api/smart-recommend?shop=${this.shopDomain}`, {
+      const response = await fetch(`${this.apiUrl}/api/recommendations?shop=${this.shopDomain}`, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          'X-Shop-Domain': this.shopDomain,
+          'Origin': window.location.origin,
+          'Accept': 'application/json'
         },
+        credentials: 'include',
         body: JSON.stringify(data)
       });
 
@@ -260,7 +257,7 @@ class SmartAdvisor {
       }
 
       const result = await response.json();
-      this.displayRecommendations(result.matches);
+      this.displayRecommendations(result.recommendations);
     } catch (error) {
       console.error('Error getting recommendations:', error);
       document.getElementById('recommendations-container').innerHTML = `
@@ -274,9 +271,9 @@ class SmartAdvisor {
     }
   }
 
-  displayRecommendations(matches) {
+  displayRecommendations(recommendations) {
     const container = document.getElementById('recommendations-container');
-    if (!matches || matches.length === 0) {
+    if (!recommendations || recommendations.length === 0) {
       container.innerHTML = `
         <div class="no-results">
           No matching products found. Try different preferences.
@@ -285,18 +282,20 @@ class SmartAdvisor {
       return;
     }
 
-    container.innerHTML = matches.map(match => `
+    container.innerHTML = recommendations.map(rec => `
       <div class="product-card">
-        ${match.product.image ? 
-          `<img src="${match.product.image}" alt="${match.product.title}">` :
+        ${rec.product.image_url ? 
+          `<img src="${rec.product.image_url}" alt="${rec.product.title}">` :
           '<div class="no-image">No image available</div>'
         }
-        <h3>${match.product.title}</h3>
-        <p class="price">$${match.product.price}</p>
-        <div class="reasons">
-          ${match.reasons.map(reason => `<p class="reason">${reason}</p>`).join('')}
+        <h3>${rec.product.title}</h3>
+        <p class="price">$${rec.product.price}</p>
+        <p class="explanation">${rec.explanation}</p>
+        <div class="match-score">
+          <div class="score-bar" style="width: ${rec.confidence_score * 100}%"></div>
+          <span>${Math.round(rec.confidence_score * 100)}% match</span>
         </div>
-        <a href="${match.product.url}" class="view-product">View Product</a>
+        <a href="${rec.product.url}" class="view-product">View Product</a>
       </div>
     `).join('');
   }
