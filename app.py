@@ -49,14 +49,7 @@ CORS(app,
      supports_credentials=True,
      resources={
          r"/*": {
-             "origins": [
-                 "https://admin.shopify.com",
-                 "https://*.myshopify.com",
-                 "https://*.onrender.com",
-                 "http://localhost:8000",
-                 "https://smart-advisor-test.myshopify.com",
-                 "https://smart-product-advisor.onrender.com"
-             ],
+             "origins": "*",  # We'll handle specific origins in after_request
              "methods": ["GET", "POST", "OPTIONS"],
              "allow_headers": [
                  "Content-Type",
@@ -709,6 +702,8 @@ def recommendations():
             origin = request.headers.get('Origin', '')
             if '.myshopify.com' in origin:
                 shop = origin.split('//')[1].split('.myshopify.com')[0] + '.myshopify.com'
+            elif '.shopify.com' in origin:
+                shop = origin.split('//')[1].split('.shopify.com')[0] + '.shopify.com'
         if not shop:
             logger.error("Missing shop parameter")
             return jsonify({"error": "Missing shop parameter"}), 400
@@ -850,14 +845,15 @@ def recommendations():
             # Create response with CORS headers
             response = make_response(jsonify(response_data))
             origin = request.headers.get('Origin', '*')
-            response.headers.update({
-                'Access-Control-Allow-Origin': origin,
-                'Access-Control-Allow-Methods': 'POST, OPTIONS',
-                'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Shop-Domain, X-Shopify-Access-Token, Origin, Accept',
-                'Access-Control-Allow-Credentials': 'true',
-                'Access-Control-Max-Age': '3600',
-                'Vary': 'Origin'
-            })
+            if origin != '*':
+                response.headers.update({
+                    'Access-Control-Allow-Origin': origin,
+                    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+                    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Shop-Domain, X-Shopify-Access-Token, Origin, Accept, X-Requested-With',
+                    'Access-Control-Allow-Credentials': 'true',
+                    'Access-Control-Max-Age': '3600',
+                    'Vary': 'Origin, Access-Control-Request-Headers'
+                })
             
             return response
             
@@ -893,6 +889,7 @@ def after_request(response):
         is_allowed = (
             origin == 'https://admin.shopify.com' or
             '.myshopify.com' in origin or
+            '.shopify.com' in origin or
             '.onrender.com' in origin or
             origin.startswith('http://localhost:') or
             origin.startswith('https://localhost:')
@@ -916,7 +913,7 @@ def after_request(response):
             # Add security headers
             response.headers.update({
                 'X-Content-Type-Options': 'nosniff',
-                'X-Frame-Options': 'ALLOW-FROM https://*.myshopify.com',
+                'X-Frame-Options': 'ALLOW-FROM https://*.myshopify.com https://*.shopify.com',
                 'X-XSS-Protection': '1; mode=block',
                 'Strict-Transport-Security': 'max-age=31536000; includeSubDomains'
             })
@@ -934,6 +931,7 @@ def recommendations_options():
         is_allowed = (
             origin == 'https://admin.shopify.com' or
             '.myshopify.com' in origin or
+            '.shopify.com' in origin or
             '.onrender.com' in origin or
             origin.startswith('http://localhost:') or
             origin.startswith('https://localhost:')

@@ -151,19 +151,34 @@ class SmartProductAdvisor {
 
   async makeRequestWithRetry(data, attempt = 1) {
     try {
+      const headers = {
+        'Content-Type': 'application/json',
+        'X-Shop-Domain': this.shopDomain,
+        'Origin': this.origin,
+        'Accept': 'application/json'
+      };
+
+      // Only add access token if it exists
+      if (this.accessToken) {
+        headers['X-Shopify-Access-Token'] = this.accessToken;
+      }
+
       const response = await fetch(`${this.apiUrl}/api/recommendations?shop=${this.shopDomain}`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Shop-Domain': this.shopDomain,
-          'X-Shopify-Access-Token': this.accessToken,
-          'Origin': this.origin,
-          'Accept': 'application/json'
-        },
+        headers: headers,
         mode: 'cors',
         credentials: 'include',
         body: JSON.stringify(data)
       });
+
+      // Handle specific error cases
+      if (response.status === 401) {
+        const data = await response.json();
+        if (data.redirect_url) {
+          window.location.href = data.redirect_url;
+          return null;
+        }
+      }
 
       // If response is 503 (service unavailable) or 429 (rate limit), retry
       if ((response.status === 503 || response.status === 429) && attempt < this.maxRetries) {
@@ -174,6 +189,7 @@ class SmartProductAdvisor {
 
       return response;
     } catch (error) {
+      console.error('Request error:', error);
       if (attempt < this.maxRetries) {
         const delay = this.retryDelay * Math.pow(2, attempt - 1);
         await new Promise(resolve => setTimeout(resolve, delay));
@@ -198,6 +214,16 @@ class SmartProductAdvisor {
     if (this.errorMessage) {
       this.errorMessage.style.display = 'block';
     }
+
+    // Add retry button handler
+    const retryButton = errorContainer.querySelector('.retry-button');
+    if (retryButton) {
+      retryButton.addEventListener('click', () => {
+        this.retryCount++;
+        this.errorMessage.style.display = 'none';
+        this.handleSubmit(new Event('submit'));
+      });
+    }
   }
 
   getErrorMessage(error) {
@@ -212,6 +238,9 @@ class SmartProductAdvisor {
     }
     if (error.message.includes('503')) {
       return 'Service temporarily unavailable. Please try again in a few moments.';
+    }
+    if (error.message.includes('CORS')) {
+      return 'Unable to connect to the recommendation service due to security restrictions. Please try refreshing the page.';
     }
     return 'Sorry, we couldn\'t get recommendations at this time. Please try again later.';
   }
