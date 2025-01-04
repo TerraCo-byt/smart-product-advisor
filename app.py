@@ -55,9 +55,7 @@ CORS(app,
                  "https://*.onrender.com",
                  "http://localhost:8000",
                  "https://smart-advisor-test.myshopify.com",
-                 "https://smart-product-advisor.onrender.com",
-                 "https://smart-advisor-test.myshopify.com",
-                 "https://smart-advisor-test.myshopify.com/products/*"
+                 "https://smart-product-advisor.onrender.com"
              ],
              "methods": ["GET", "POST", "OPTIONS"],
              "allow_headers": [
@@ -68,7 +66,10 @@ CORS(app,
                  "Origin",
                  "Accept",
                  "Cookie",
-                 "X-Requested-With"
+                 "X-Requested-With",
+                 "Sec-Fetch-Site",
+                 "Sec-Fetch-Mode",
+                 "Sec-Fetch-Dest"
              ],
              "expose_headers": [
                  "Content-Range",
@@ -76,7 +77,9 @@ CORS(app,
                  "Set-Cookie"
              ],
              "supports_credentials": True,
-             "max_age": 3600
+             "max_age": 3600,
+             "send_wildcard": False,
+             "vary_header": True
          }
      })
 
@@ -737,6 +740,10 @@ def recommendations():
             
         # Process preferences
         try:
+            # Check if data is wrapped in preferences object
+            if 'preferences' in data:
+                data = data['preferences']
+                
             keywords = data.get('keywords', '')
             if isinstance(keywords, str):
                 keywords = [k.strip() for k in keywords.split(',') if k.strip()]
@@ -883,28 +890,35 @@ def after_request(response):
     origin = request.headers.get('Origin')
     if origin:
         # Allow requests from Shopify admin and store domains
-        allowed_origins = [
-            'https://admin.shopify.com',
-            'https://smart-advisor-test.myshopify.com',
-            'https://smart-product-advisor.onrender.com'
-        ]
-        
-        # Check if origin is allowed
         is_allowed = (
-            origin in allowed_origins or
-            origin.endswith('.myshopify.com') or
-            origin.endswith('.onrender.com')
+            origin == 'https://admin.shopify.com' or
+            '.myshopify.com' in origin or
+            '.onrender.com' in origin or
+            origin.startswith('http://localhost:') or
+            origin.startswith('https://localhost:')
         )
         
         if is_allowed:
+            # Set CORS headers
             response.headers.update({
                 'Access-Control-Allow-Origin': origin,
                 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-                'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Shop-Domain, X-Shopify-Access-Token, Origin, Accept, X-Requested-With',
+                'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Shop-Domain, X-Shopify-Access-Token, Origin, Accept, X-Requested-With, Sec-Fetch-Site, Sec-Fetch-Mode, Sec-Fetch-Dest',
                 'Access-Control-Allow-Credentials': 'true',
                 'Access-Control-Max-Age': '3600',
                 'Access-Control-Expose-Headers': 'Content-Range, X-Content-Range, Set-Cookie',
-                'Vary': 'Origin'
+                'Vary': 'Origin, Access-Control-Request-Headers',
+                'Cross-Origin-Resource-Policy': 'cross-origin',
+                'Cross-Origin-Opener-Policy': 'same-origin',
+                'Referrer-Policy': 'strict-origin-when-cross-origin'
+            })
+            
+            # Add security headers
+            response.headers.update({
+                'X-Content-Type-Options': 'nosniff',
+                'X-Frame-Options': 'ALLOW-FROM https://*.myshopify.com',
+                'X-XSS-Protection': '1; mode=block',
+                'Strict-Transport-Security': 'max-age=31536000; includeSubDomains'
             })
     
     return response
@@ -917,28 +931,24 @@ def recommendations_options():
     
     if origin:
         # Allow requests from Shopify admin and store domains
-        allowed_origins = [
-            'https://admin.shopify.com',
-            'https://smart-advisor-test.myshopify.com',
-            'https://smart-product-advisor.onrender.com'
-        ]
-        
-        # Check if origin is allowed
         is_allowed = (
-            origin in allowed_origins or
-            origin.endswith('.myshopify.com') or
-            origin.endswith('.onrender.com')
+            origin == 'https://admin.shopify.com' or
+            '.myshopify.com' in origin or
+            '.onrender.com' in origin or
+            origin.startswith('http://localhost:') or
+            origin.startswith('https://localhost:')
         )
         
         if is_allowed:
+            # Set CORS headers for preflight
             response.headers.update({
                 'Access-Control-Allow-Origin': origin,
                 'Access-Control-Allow-Methods': 'POST, OPTIONS',
-                'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Shop-Domain, X-Shopify-Access-Token, Origin, Accept, X-Requested-With',
+                'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Shop-Domain, X-Shopify-Access-Token, Origin, Accept, X-Requested-With, Sec-Fetch-Site, Sec-Fetch-Mode, Sec-Fetch-Dest',
                 'Access-Control-Allow-Credentials': 'true',
                 'Access-Control-Max-Age': '3600',
                 'Access-Control-Expose-Headers': 'Content-Range, X-Content-Range, Set-Cookie',
-                'Vary': 'Origin'
+                'Vary': 'Origin, Access-Control-Request-Headers'
             })
     
     return response
