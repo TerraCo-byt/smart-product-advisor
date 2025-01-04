@@ -1,7 +1,7 @@
 class SmartProductAdvisor {
   constructor(container) {
     this.container = container;
-    this.apiUrl = container.dataset.apiUrl;
+    this.apiUrl = 'https://smart-product-advisor-proxy.onrender.com';
     this.shopDomain = container.dataset.shopDomain;
     this.accessToken = container.dataset.accessToken;
     this.origin = window.location.origin;
@@ -163,7 +163,7 @@ class SmartProductAdvisor {
         headers['X-Shopify-Access-Token'] = this.accessToken;
       }
 
-      const response = await fetch(`${this.apiUrl}/api/recommendations?shop=${this.shopDomain}`, {
+      const response = await fetch(`${this.apiUrl}/api/proxy/recommendations`, {
         method: 'POST',
         headers: headers,
         mode: 'cors',
