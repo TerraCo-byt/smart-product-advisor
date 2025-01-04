@@ -1,7 +1,7 @@
 class SmartProductAdvisor {
   constructor(container) {
     this.container = container;
-    this.apiUrl = 'https://smart-product-advisor-proxy.onrender.com';
+    this.apiUrl = 'https://smart-advisor-proxy.onrender.com';
     this.shopDomain = container.dataset.shopDomain;
     this.accessToken = container.dataset.accessToken;
     this.origin = window.location.origin;
