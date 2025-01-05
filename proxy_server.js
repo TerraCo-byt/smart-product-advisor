@@ -45,7 +45,19 @@ app.use(cors({
   optionsSuccessStatus: 204
 }));
 
+// Handle preflight requests
 app.options('*', cors());
+
+// Retry configuration
+const axiosRetry = require('axios-retry');
+axiosRetry(axios, { 
+  retries: 3,
+  retryDelay: axiosRetry.exponentialDelay,
+  retryCondition: (error) => {
+    return axiosRetry.isNetworkOrIdempotentRequestError(error) || 
+           (error.response && error.response.status === 503);
+  }
+});
 
 // GraphQL query for products
 const PRODUCTS_QUERY = `
@@ -97,10 +109,16 @@ app.post('/apps/smart-advisor/proxy/recommendations', async (req, res) => {
       origin: req.headers.origin
     });
 
+    // Set CORS headers early
+    res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+    res.header('Access-Control-Allow-Credentials', 'true');
+    res.header('Vary', 'Origin');
+
     // Validate shop domain
     const shopDomain = req.headers['x-shop-domain'] || req.query.shop;
     if (!shopDomain || !shopDomain.endsWith('.myshopify.com')) {
       return res.status(400).json({
+        success: false,
         error: 'Invalid shop domain',
         details: 'A valid Shopify shop domain is required'
       });
@@ -110,6 +128,7 @@ app.post('/apps/smart-advisor/proxy/recommendations', async (req, res) => {
     const accessToken = req.headers['x-shopify-access-token'];
     if (!accessToken) {
       return res.status(401).json({
+        success: false,
         error: 'Unauthorized',
         details: 'Missing access token'
       });
@@ -143,7 +162,7 @@ app.post('/apps/smart-advisor/proxy/recommendations', async (req, res) => {
       product_type: edge.node.productType
     }));
 
-    // Then get recommendations
+    // Then get recommendations with retry logic
     const recommendationsResponse = await axios({
       method: 'POST',
       url: 'https://smart-product-advisor.onrender.com/api/recommendations',
@@ -156,38 +175,60 @@ app.post('/apps/smart-advisor/proxy/recommendations', async (req, res) => {
         'X-Shop-Domain': shopDomain,
         'Origin': req.headers.origin || `https://${shopDomain}`
       },
-      timeout: 10000
+      timeout: 15000, // Increased timeout
+      validateStatus: function (status) {
+        return status >= 200 && status < 500; // Don't reject if status is not 5xx
+      }
     });
 
-    // Set CORS headers
-    res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
-    res.header('Access-Control-Allow-Credentials', 'true');
-    res.header('Vary', 'Origin');
+    // Check if the recommendations response is successful
+    if (recommendationsResponse.status === 503) {
+      return res.status(503).json({
+        success: false,
+        error: 'Service Temporarily Unavailable',
+        details: 'The recommendations service is currently unavailable. Please try again in a few moments.',
+        retry_after: 5
+      });
+    }
+
+    if (!recommendationsResponse.data.success) {
+      return res.status(400).json({
+        success: false,
+        error: 'Failed to get recommendations',
+        details: recommendationsResponse.data.error || 'Unknown error occurred'
+      });
+    }
 
     console.log('Proxy response successful');
-    res.json(recommendationsResponse.data);
+    res.json({
+      success: true,
+      recommendations: recommendationsResponse.data.recommendations
+    });
   } catch (error) {
     console.error('Proxy error:', error);
 
+    // Set appropriate status code and error message
+    let statusCode = 500;
+    let errorMessage = 'Internal Server Error';
+    let errorDetails = error.message;
+
     if (error.response) {
-      res.status(error.response.status).json({
-        error: 'API Error',
-        details: error.response.data,
-        status: error.response.status
-      });
+      statusCode = error.response.status;
+      errorMessage = error.response.data?.error || 'API Error';
+      errorDetails = error.response.data?.details || error.response.statusText;
     } else if (error.request) {
-      res.status(504).json({
-        error: 'Gateway Timeout',
-        details: 'No response received from API',
-        status: 504
-      });
-    } else {
-      res.status(500).json({
-        error: 'Internal Server Error',
-        details: error.message,
-        status: 500
-      });
+      statusCode = 504;
+      errorMessage = 'Gateway Timeout';
+      errorDetails = 'No response received from API';
     }
+
+    res.status(statusCode).json({
+      success: false,
+      error: errorMessage,
+      details: errorDetails,
+      status: statusCode,
+      retry_after: statusCode === 503 ? 5 : undefined
+    });
   }
 });
 
