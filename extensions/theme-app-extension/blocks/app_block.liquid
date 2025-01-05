@@ -1,0 +1,124 @@
+{% schema %}
+{
+  "name": "Smart Product Advisor",
+  "target": "section",
+  "stylesheet": "advisor.css",
+  "javascript": "smart-advisor-client.js",
+  "settings": [
+    {
+      "type": "text",
+      "id": "title",
+      "label": "Title",
+      "default": "Find Your Perfect Match"
+    }
+  ]
+}
+{% endschema %}
+
+<div id="smart-advisor-container" class="smart-advisor-container">
+  <h2>{{ block.settings.title }}</h2>
+  
+  <form id="smart-advisor-form" class="smart-advisor-form">
+    <div class="form-group">
+      <label for="price_range">Price Range</label>
+      <select name="price_range" id="price_range" required>
+        <option value="any">Any Price</option>
+        <option value="budget">Budget (Under £50)</option>
+        <option value="mid">Mid-Range (£50-£200)</option>
+        <option value="premium">Premium (Over £200)</option>
+      </select>
+    </div>
+
+    <div class="form-group">
+      <label for="category">Category</label>
+      <select name="category" id="category" required>
+        <option value="any">Any Category</option>
+        <option value="clothing">Clothing</option>
+        <option value="accessories">Accessories</option>
+        <option value="home">Home & Living</option>
+        <option value="electronics">Electronics</option>
+      </select>
+    </div>
+
+    <div class="form-group">
+      <label for="keywords">Keywords (comma-separated)</label>
+      <input type="text" name="keywords" id="keywords" placeholder="e.g., casual, summer, comfortable">
+    </div>
+
+    <button type="submit" class="submit-button">
+      <span class="button-text">Find Products</span>
+    </button>
+  </form>
+
+  <div class="recommendations-container">
+    <!-- Results will be shown here -->
+  </div>
+</div>
+
+<style>
+.smart-advisor-container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 20px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+}
+
+.smart-advisor-form {
+  max-width: 600px;
+  margin: 0 auto 30px;
+  padding: 20px;
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.form-group {
+  margin-bottom: 20px;
+}
+
+.form-group label {
+  display: block;
+  margin-bottom: 8px;
+  font-weight: 500;
+}
+
+.form-group select,
+.form-group input {
+  width: 100%;
+  padding: 10px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 16px;
+}
+
+.submit-button {
+  width: 100%;
+  padding: 12px;
+  background: #000;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-size: 16px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.submit-button:hover {
+  background: #333;
+}
+
+.submit-button:disabled {
+  background: #666;
+  cursor: not-allowed;
+}
+
+.recommendations-container {
+  max-width: 1000px;
+  margin: 0 auto;
+}
+
+h2 {
+  text-align: center;
+  margin-bottom: 30px;
+}
+</style> 
