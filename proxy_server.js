@@ -15,12 +15,15 @@ app.use(cors({
   origin: function(origin, callback) {
     if (!origin) return callback(null, true);
 
+    // Allow all Shopify-related domains and localhost
     if (
       origin.endsWith('.myshopify.com') ||
       origin === 'https://admin.shopify.com' ||
       origin.includes('.shopify.com') ||
       origin.startsWith('http://localhost:') ||
-      origin.startsWith('https://localhost:')
+      origin.startsWith('https://localhost:') ||
+      // Allow password page domains
+      origin.includes('shopifypreview.com')
     ) {
       callback(null, true);
     } else {
@@ -36,9 +39,15 @@ app.use(cors({
     'X-CSRF-Token',
     'Origin',
     'Accept',
-    'X-Requested-With'
+    'X-Requested-With',
+    'X-Shopify-Preview', // Add preview header
+    'Cookie' // Allow cookie header for password sessions
   ],
-  exposedHeaders: ['Content-Range', 'X-Content-Range'],
+  exposedHeaders: [
+    'Content-Range', 
+    'X-Content-Range',
+    'Set-Cookie' // Allow setting cookies
+  ],
   credentials: true,
   maxAge: 86400,
   preflightContinue: false,
@@ -114,8 +123,25 @@ app.post('/apps/smart-advisor/proxy/recommendations', async (req, res) => {
     res.header('Access-Control-Allow-Credentials', 'true');
     res.header('Vary', 'Origin');
 
-    // Validate shop domain
-    const shopDomain = req.headers['x-shop-domain'] || req.query.shop;
+    // Get shop domain from various possible sources
+    let shopDomain = req.headers['x-shop-domain'] || req.query.shop;
+    
+    // If no shop domain in headers, try to extract from origin or referer
+    if (!shopDomain) {
+      const origin = req.headers.origin || req.headers.referer;
+      if (origin) {
+        // Handle both myshopify.com and shopifypreview.com domains
+        if (origin.includes('.myshopify.com')) {
+          shopDomain = origin.split('//')[1].split('.myshopify.com')[0] + '.myshopify.com';
+        } else if (origin.includes('shopifypreview.com')) {
+          // Extract shop domain from preview URL
+          const previewUrl = new URL(origin);
+          shopDomain = previewUrl.searchParams.get('shop') || 
+                      previewUrl.pathname.split('/')[1] + '.myshopify.com';
+        }
+      }
+    }
+
     if (!shopDomain || !shopDomain.endsWith('.myshopify.com')) {
       return res.status(400).json({
         success: false,
@@ -140,17 +166,19 @@ app.post('/apps/smart-advisor/proxy/recommendations', async (req, res) => {
       url: `https://${shopDomain}/admin/api/2024-01/graphql.json`,
       headers: {
         'Content-Type': 'application/json',
-        'X-Shopify-Access-Token': accessToken
+        'X-Shopify-Access-Token': accessToken,
+        'X-Shopify-Preview': 'true', // Add preview header
+        Cookie: req.headers.cookie // Forward cookies for password session
       },
       data: {
         query: PRODUCTS_QUERY,
         variables: {
-          first: 20 // Fetch up to 20 products
+          first: 20
         }
       }
     });
 
-    // Transform GraphQL response to the format expected by the recommendations API
+    // Transform GraphQL response
     const products = graphqlResponse.data.data.products.edges.map(edge => ({
       id: edge.node.id,
       title: edge.node.title,
@@ -162,26 +190,34 @@ app.post('/apps/smart-advisor/proxy/recommendations', async (req, res) => {
       product_type: edge.node.productType
     }));
 
-    // Then get recommendations with retry logic
+    // Get recommendations with retry logic
     const recommendationsResponse = await axios({
       method: 'POST',
       url: 'https://smart-product-advisor.onrender.com/api/recommendations',
       data: {
         ...req.body,
-        products // Pass the transformed products to the recommendations API
+        products,
+        shop: shopDomain,
+        preview: true // Indicate this is a preview/password-protected request
       },
       headers: {
         'Content-Type': 'application/json',
         'X-Shop-Domain': shopDomain,
-        'Origin': req.headers.origin || `https://${shopDomain}`
+        'Origin': req.headers.origin || `https://${shopDomain}`,
+        'X-Shopify-Preview': 'true',
+        Cookie: req.headers.cookie
       },
-      timeout: 15000, // Increased timeout
+      timeout: 15000,
       validateStatus: function (status) {
-        return status >= 200 && status < 500; // Don't reject if status is not 5xx
+        return status >= 200 && status < 500;
       }
     });
 
-    // Check if the recommendations response is successful
+    // Forward any cookies from the response
+    if (recommendationsResponse.headers['set-cookie']) {
+      res.header('Set-Cookie', recommendationsResponse.headers['set-cookie']);
+    }
+
     if (recommendationsResponse.status === 503) {
       return res.status(503).json({
         success: false,
@@ -207,7 +243,6 @@ app.post('/apps/smart-advisor/proxy/recommendations', async (req, res) => {
   } catch (error) {
     console.error('Proxy error:', error);
 
-    // Set appropriate status code and error message
     let statusCode = 500;
     let errorMessage = 'Internal Server Error';
     let errorDetails = error.message;
@@ -216,6 +251,13 @@ app.post('/apps/smart-advisor/proxy/recommendations', async (req, res) => {
       statusCode = error.response.status;
       errorMessage = error.response.data?.error || 'API Error';
       errorDetails = error.response.data?.details || error.response.statusText;
+      
+      // Special handling for password protection
+      if (statusCode === 401 && error.response.headers['www-authenticate']?.includes('StorefrontPassword')) {
+        statusCode = 403;
+        errorMessage = 'Store Password Required';
+        errorDetails = 'This store is password protected. Please enter the store password to continue.';
+      }
     } else if (error.request) {
       statusCode = 504;
       errorMessage = 'Gateway Timeout';
@@ -227,7 +269,8 @@ app.post('/apps/smart-advisor/proxy/recommendations', async (req, res) => {
       error: errorMessage,
       details: errorDetails,
       status: statusCode,
-      retry_after: statusCode === 503 ? 5 : undefined
+      retry_after: statusCode === 503 ? 5 : undefined,
+      requires_password: statusCode === 403
     });
   }
 });
@@ -238,7 +281,8 @@ app.get('/health', (req, res) => {
     status: 'healthy',
     timestamp: new Date().toISOString(),
     cors: 'enabled',
-    api_version: '2024-01'
+    api_version: '2024-01',
+    preview_support: true
   });
 });
 
