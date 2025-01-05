@@ -10,24 +10,24 @@ const app = express();
 app.use(express.json());
 app.use(morgan('combined')); // For request logging
 
-// CORS configuration
+// CORS configuration with preflight handling
 app.use(cors({
   origin: function(origin, callback) {
-    const allowedOrigins = [
-      'https://smart-advisor-test.myshopify.com',
-      'https://admin.shopify.com',
-      'http://localhost:3000',
-      'http://localhost:8000'
-    ];
-    
     // Allow requests with no origin (like mobile apps or curl requests)
     if (!origin) return callback(null, true);
-    
-    if (allowedOrigins.indexOf(origin) === -1) {
-      const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
-      return callback(new Error(msg), false);
+
+    // Check if the origin is a Shopify domain
+    if (
+      origin.endsWith('.myshopify.com') ||
+      origin === 'https://admin.shopify.com' ||
+      origin.includes('.shopify.com') ||
+      origin.startsWith('http://localhost:') ||
+      origin.startsWith('https://localhost:')
+    ) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
     }
-    return callback(null, true);
   },
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: [
@@ -35,19 +35,38 @@ app.use(cors({
     'Authorization',
     'X-Shop-Domain',
     'X-Shopify-Access-Token',
+    'X-CSRF-Token',
     'Origin',
-    'Accept'
+    'Accept',
+    'X-Requested-With'
   ],
-  credentials: true
+  exposedHeaders: ['Content-Range', 'X-Content-Range'],
+  credentials: true,
+  maxAge: 86400, // 24 hours
+  preflightContinue: false,
+  optionsSuccessStatus: 204
 }));
 
-// Proxy endpoint for recommendations
-app.post('/api/proxy/recommendations', async (req, res) => {
+// Handle preflight requests
+app.options('*', cors());
+
+// Shopify app proxy endpoint
+app.post('/apps/smart-advisor/proxy/recommendations', async (req, res) => {
   try {
-    console.log('Received proxy request:', {
+    console.log('Received Shopify proxy request:', {
       body: req.body,
-      headers: req.headers
+      headers: req.headers,
+      origin: req.headers.origin
     });
+
+    // Validate shop domain
+    const shopDomain = req.headers['x-shop-domain'] || req.query.shop;
+    if (!shopDomain || !shopDomain.endsWith('.myshopify.com')) {
+      return res.status(400).json({
+        error: 'Invalid shop domain',
+        details: 'A valid Shopify shop domain is required'
+      });
+    }
 
     const response = await axios({
       method: 'POST',
@@ -55,15 +74,21 @@ app.post('/api/proxy/recommendations', async (req, res) => {
       data: req.body,
       headers: {
         'Content-Type': 'application/json',
-        'X-Shop-Domain': req.headers['x-shop-domain'],
-        'X-Shopify-Access-Token': req.headers['x-shopify-access-token']
+        'X-Shop-Domain': shopDomain,
+        'X-Shopify-Access-Token': req.headers['x-shopify-access-token'],
+        'Origin': req.headers.origin || `https://${shopDomain}`
       },
       timeout: 10000 // 10 second timeout
     });
 
+    // Set CORS headers for the response
+    res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+    res.header('Access-Control-Allow-Credentials', 'true');
+    res.header('Vary', 'Origin');
+
     console.log('Proxy response:', {
       status: response.status,
-      data: response.data
+      headers: response.headers
     });
 
     res.json(response.data);
@@ -72,23 +97,25 @@ app.post('/api/proxy/recommendations', async (req, res) => {
 
     // Handle different types of errors
     if (error.response) {
-      // The request was made and the server responded with a status code
-      // that falls out of the range of 2xx
+      // API responded with error
       res.status(error.response.status).json({
         error: 'API Error',
-        details: error.response.data
+        details: error.response.data,
+        status: error.response.status
       });
     } else if (error.request) {
-      // The request was made but no response was received
+      // No response received
       res.status(504).json({
         error: 'Gateway Timeout',
-        details: 'No response received from API'
+        details: 'No response received from API',
+        status: 504
       });
     } else {
-      // Something happened in setting up the request that triggered an Error
+      // Request setup error
       res.status(500).json({
         error: 'Internal Server Error',
-        details: error.message
+        details: error.message,
+        status: 500
       });
     }
   }
@@ -96,7 +123,11 @@ app.post('/api/proxy/recommendations', async (req, res) => {
 
 // Health check endpoint
 app.get('/health', (req, res) => {
-  res.json({ status: 'healthy' });
+  res.json({ 
+    status: 'healthy',
+    timestamp: new Date().toISOString(),
+    cors: 'enabled'
+  });
 });
 
 const PORT = process.env.PORT || 3000;

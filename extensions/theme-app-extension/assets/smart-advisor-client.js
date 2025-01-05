@@ -5,25 +5,65 @@ class SmartAdvisorClient {
         this.proxyPath = '/proxy';
         this.retryAttempts = 3;
         this.retryDelay = 1000;
+        
+        // Get shop domain from meta tag or URL
+        this.shopDomain = this.getShopDomain();
+    }
+
+    getShopDomain() {
+        // Try to get from meta tag first
+        const metaTag = document.querySelector('meta[name="shopify-shop-domain"]');
+        if (metaTag) {
+            return metaTag.content;
+        }
+        
+        // Fallback to URL parsing
+        const hostname = window.location.hostname;
+        if (hostname.includes('myshopify.com')) {
+            return hostname;
+        }
+        
+        // Final fallback
+        return null;
     }
 
     async getRecommendations(params, attempt = 1) {
         try {
             this.showLoading();
 
+            // Validate shop domain
+            if (!this.shopDomain) {
+                throw new Error('Shop domain not found');
+            }
+
             const response = await fetch(`${this.baseUrl}${this.proxyPath}/recommendations`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
+                    'X-Shop-Domain': this.shopDomain,
+                    'X-Requested-With': 'XMLHttpRequest',
                     ...(window.csrfToken && {
                         'X-CSRF-Token': window.csrfToken
                     })
                 },
                 credentials: 'include',
-                body: JSON.stringify(params)
+                mode: 'cors',
+                body: JSON.stringify({
+                    ...params,
+                    shop: this.shopDomain
+                })
             });
 
             if (!response.ok) {
+                // Handle specific error cases
+                if (response.status === 401) {
+                    const data = await response.json();
+                    if (data.redirect_url) {
+                        window.location.href = data.redirect_url;
+                        return null;
+                    }
+                }
+
                 // Retry on specific status codes
                 if ((response.status === 429 || response.status === 503) && attempt < this.retryAttempts) {
                     const delay = this.retryDelay * Math.pow(2, attempt - 1);
@@ -46,7 +86,7 @@ class SmartAdvisorClient {
             console.error('Smart Advisor Error:', error);
             
             // Retry on network errors
-            if (error.name === 'TypeError' && attempt < this.retryAttempts) {
+            if ((error.name === 'TypeError' || error.message.includes('Failed to fetch')) && attempt < this.retryAttempts) {
                 const delay = this.retryDelay * Math.pow(2, attempt - 1);
                 await new Promise(resolve => setTimeout(resolve, delay));
                 return this.getRecommendations(params, attempt + 1);
